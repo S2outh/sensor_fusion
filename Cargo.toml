@@ -3,6 +3,9 @@ name = "sensor_fusion"
 version = "0.1.0"
 edition = "2024"
 
-
 [dependencies]
 libm = "0.2.16"
+csv = "1.3"
+io = "0.0.2"
+nalgebra = "0.32"
+static_cell = "2.1.1"
