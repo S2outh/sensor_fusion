@@ -1,7 +1,7 @@
 use std::{fs::File, time::Instant};
 use std::error::Error;
 use nalgebra::{SMatrix, SVector, UnitQuaternion, Vector3, Matrix3};
-use crate::math_utils::{self, ecef_to_ned_matrix, get_reference_coordinates_new, latlonh_to_ecef};
+use crate::math_utils::{self, ecef_to_ned_matrix, get_reference_coordinates_new, latlonh_to_ecef, normalize_quaternion, state_transition, state_transition_jacobian};
 
 const CALIBRAION_DURATION: f64 = 0.5;
 
@@ -183,9 +183,18 @@ impl math_utils::RocketEKF{
             baro_needs_sync: false,
         }
     }
-    // TODO: Evtl dt anpassen
     pub fn predict(&mut self, dt: f64){
+        let f = state_transition_jacobian(&self.state, dt);
+        self.state = state_transition(&self.state, dt);
+        self.p = f * self.p * f.transpose() + self.q;
+
+
+        let q_slice = self.state.fixed_rows::<4>(12);
+        let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         
+        let q_norm = normalize_quaternion(q_raw);
+
+        self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
     }
 }
 

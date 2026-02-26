@@ -458,8 +458,8 @@ pub fn normalize_vector(vector: [f32; 3]) -> [f32; 3] {
     }
 }
 
-pub fn normalize_quaternion(quaternion: [f32; 4]) -> [f32; 4] {
-    let norm = sqrtf(
+pub fn normalize_quaternion(quaternion: [f64; 4]) -> [f64; 4] {
+    let norm = sqrt(
         quaternion[0] * quaternion[0] + 
         quaternion[1] * quaternion[1] + 
         quaternion[2] * quaternion[2] + 
@@ -530,4 +530,57 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
     next_state[15] = next_q[3];
 
     next_state
+}
+
+pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f64, 23, 23> {
+    let mut f = SMatrix::<f64, 23, 23>::identity(); // Diagonaleinträge = 1
+    
+    // Quaternion of state
+    let q_vec = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
+    let q = UnitQuaternion::from_quaternion(Quaternion::from_vector(q_vec));
+    let r = q.to_rotation_matrix();
+
+    // Python: F[3:6, 6:9] = R * dt
+    // Python: F[3:6, 16:19] = -R * dt
+    for row in 0..3 {
+        for col in 0..3 {
+            let val = r[(row, col)] * dt;
+            f[(3 + row, 6 + col)] = val;
+            f[(3 + row, 16 + col)] = -val; //Bias
+        }
+    }
+
+    // Gyro + Bias
+    let gx = state[9] + state[19];
+    let gy = state[10] + state[20];
+    let gz = state[11] + state[21];
+
+    // Partial differentiation
+    f[(12, 13)] = -0.5 * gx * dt; f[(12, 14)] = -0.5 * gy * dt; f[(12, 15)] = -0.5 * gz * dt;
+    f[(13, 12)] =  0.5 * gx * dt; f[(13, 14)] =  0.5 * gz * dt; f[(13, 15)] = -0.5 * gy * dt;
+    f[(14, 12)] =  0.5 * gy * dt; f[(14, 13)] = -0.5 * gz * dt; f[(14, 15)] =  0.5 * gx * dt;
+    f[(15, 12)] =  0.5 * gz * dt; f[(15, 13)] =  0.5 * gy * dt; f[(15, 14)] = -0.5 * gx * dt;
+
+    let q_vals = [state[12], state[13], state[14], state[15]]; // x, y, z, w
+    
+    // Zeile 12: [-0.5*q1, -0.5*q2, -0.5*q3]
+    // Zeile 13: [ 0.5*q0, -0.5*q3,  0.5*q2]
+    // Zeile 14: [ 0.5*q3,  0.5*q0, -0.5*q1]
+    // Zeile 15: [-0.5*q2,  0.5*q1,  0.5*q0]
+    let derivs = [
+        [-0.5 * q_vals[1], -0.5 * q_vals[2], -0.5 * q_vals[3]],
+        [ 0.5 * q_vals[0], -0.5 * q_vals[3],  0.5 * q_vals[2]],
+        [ 0.5 * q_vals[3],  0.5 * q_vals[0], -0.5 * q_vals[1]],
+        [-0.5 * q_vals[2],  0.5 * q_vals[1],  0.5 * q_vals[0]],
+    ];
+
+    for i in 0..4 {
+        for j in 0..3 {
+            let val = derivs[i][j] * dt;
+            f[(12 + i, 19 + j)] = val; // Bias
+            f[(12 + i, 9 + j)] = val;  // Gyro
+        }
+    }
+
+    f
 }
