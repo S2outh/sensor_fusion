@@ -41,6 +41,24 @@ pub struct RocketEKF{
     pub baro_needs_sync: bool,
 }
 
+pub struct FlightManager{
+    pub rocket_started: bool,
+    pub ascent_flag: bool,
+    pub calibration_active: bool,
+    pub calibration_start_time: f64,
+    pub calibration_count: usize,
+    pub last_valid_gps: usize,
+    
+    // Ringpuffer für den Tiefpass 
+    pub accel_gyro_window: Vec<[f64; 6]>,
+    pub altitude_window: Vec<f64>,
+}
+
+pub struct RawSensorData{
+    times: Vec<f64>,
+    values: Vec<f64>,
+}
+
 
 pub fn pres_to_alt(pres: f32) -> f32{
     //44_330.0 * (1.0 - powf(pres/101274.697, 1.0/5.255)) //Graz
@@ -92,7 +110,7 @@ pub fn quaternion_rotation_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
     ]
 }
 
-pub fn compute_d_rotation_d_quaternion(q: &[f32; 4]) -> [[[f32; 3]; 4]; 3] {
+pub fn compute_d_rotation_d_quaternion_old(q: &[f64; 4]) -> [[[f64; 3]; 4]; 3] {
 
     // Compute derivative of rotation matrix w.r.t. quaternion components
     // Returns tensor of shape (4, 3, 3) where:
@@ -103,7 +121,7 @@ pub fn compute_d_rotation_d_quaternion(q: &[f32; 4]) -> [[[f32; 3]; 4]; 3] {
     let y = q[2];
     let z = q[3];
 
-    let mut dr_dq = [[[0.0f32; 3]; 3]; 4];
+    let mut dr_dq = [[[0.0f64; 3]; 3]; 4];
 
     // dR/dw
     dr_dq[0] = [
@@ -133,7 +151,7 @@ pub fn compute_d_rotation_d_quaternion(q: &[f32; 4]) -> [[[f32; 3]; 4]; 3] {
         [2.0 * x, 2.0 * y, 2.0 * z],
     ];
 
-    let mut result = [[[0.0f32; 3]; 4]; 3];
+    let mut result = [[[0.0f64; 3]; 4]; 3];
     for i in 0..3 {
         for j in 0..4 {
             for k in 0..3 {
@@ -146,6 +164,43 @@ pub fn compute_d_rotation_d_quaternion(q: &[f32; 4]) -> [[[f32; 3]; 4]; 3] {
 }
 
 
+pub fn compute_d_rotation_d_quaternion(q: &[f64; 4]) -> [Matrix3<f64>; 4] {
+    // q[0]=w, q[1]=x, q[2]=y, q[3]=z (Annahme: Hamilton-Notation)
+    let w = q[0];
+    let x = q[1];
+    let y = q[2];
+    let z = q[3];
+
+    // dR/dw
+    let dr_dw = Matrix3::new(
+        0.0,      -4.0 * z,  4.0 * y,
+        4.0 * z,   0.0,     -4.0 * x,
+       -4.0 * y,   4.0 * x,  0.0,
+    );
+
+    // dR/dx
+    let dr_dx = Matrix3::new(
+        0.0,       4.0 * y,  4.0 * z,
+        4.0 * y,  -8.0 * x, -4.0 * w,
+        4.0 * z,   4.0 * w, -8.0 * x,
+    );
+
+    // dR/dy
+    let dr_dy = Matrix3::new(
+       -8.0 * y,   4.0 * x,  4.0 * w,
+        4.0 * x,   0.0,      4.0 * z,
+       -4.0 * w,   4.0 * z, -8.0 * y,
+    );
+
+    // dR/dz
+    let dr_dz = Matrix3::new(
+       -8.0 * z,  -4.0 * w,  4.0 * x,
+        4.0 * w,  -8.0 * z,  4.0 * y,
+        4.0 * x,   4.0 * y,  0.0,
+    );
+
+    [dr_dw, dr_dx, dr_dy, dr_dz]
+}
 pub fn latlonh_to_ecef_old(lat_deg: f32, lon_deg: f32, h_m: f32) -> [f32; 3] {
     // WGS84 consts
     let a: f32 = 6_378_137.0;
@@ -581,6 +636,86 @@ pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f
             f[(12 + i, 9 + j)] = val;  // Gyro
         }
     }
-
     f
+}
+
+
+// h(x) simulation, if my predicted state is perfect, which numbers would show my sensors
+pub fn measurement_function(state: &SVector<f64, 23>, calibration_active: bool) -> SVector<f64, 10> {
+    // Expected acceleration measurments 
+    let ax_expected = state[6] - state[16];
+    let ay_expected = state[7] - state[17];
+    let az_expected = state[8] - state[18];
+
+    // Expected Gyro measurments
+    let (g_roll_expected, g_pitch_expected, g_yaw_expected) = if calibration_active {
+        // during calibration -> only bias/ noise
+        (state[9], state[10], state[11])
+    } else {
+        // during flight -> true rate of rotation - bias
+        (
+            state[9] - state[19],
+            state[10] - state[20],
+            state[11] - state[21],
+        )
+    };
+
+    // Expected Baro measurment (hight-baro offset)
+    let baro_expected = state[2] - state[22];
+
+    // Measurment vector
+    SVector::<f64, 10>::from_column_slice(&[
+        state[0],        // gps_lat (bzw. North m)
+        state[1],        // gps_lon (bzw. East m)
+        state[2],        // gps_alt (bzw. Down m)
+        ax_expected,     // low_g_ax
+        ay_expected,     // low_g_ay
+        az_expected,     // low_g_az
+        g_roll_expected, // low_g_gx
+        g_pitch_expected,// low_g_gy
+        g_yaw_expected,  // low_g_gz
+        baro_expected,   // baro_alt
+    ])
+}
+
+// H, if a number change in my state, how infect this my theoretical measurments
+pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
+    let mut h = SMatrix::<f64, 10, 23>::zeros();
+    
+    // GPS Position
+    h[(0, 0)] = 1.0; // d(gps_n) / d(north)
+    h[(1, 1)] = 1.0; // d(gps_e) / d(east)
+    h[(2, 2)] = 1.0; // d(gps_d) / d(down)
+
+    // Baro
+    h[(9, 2)] = 1.0;  // d(baro_alt) / d(down_pos)
+    h[(9, 22)] = -1.0; // d(baro_alt) / d(baro_bias)
+
+    // predictet measurment = true acc - bias, because of that second row is negativ
+    h[(3, 6)] = 1.0; h[(4, 7)] = 1.0; h[(5, 8)] = 1.0;
+    // Accel-Bias
+    h[(3, 16)] = -1.0; h[(4, 17)] = -1.0; h[(5, 18)] = -1.0;
+
+    // Gyro bias 
+    h[(6, 19)] = -1.0; h[(7, 20)] = -1.0; h[(8, 21)] = -1.0; 
+    h[(6, 9)] = 1.0; h[(7, 10)] = 1.0; h[(8, 11)] = 1.0;
+
+    // TODO: Verstehen
+    let accel_norm = (state.fixed_rows::<3>(6)).norm();
+    if (accel_norm - 9.81).abs() < 1e-2 {
+        let q = [state[12], state[13], state[14], state[15]]; // x, y, z, w
+        let d_r_dq = compute_d_rotation_d_quaternion(&q);
+        let g_ned = SVector::<f64, 3>::new(0.0, 0.0, 9.8);
+
+        for j in 0..4 {
+            let dr_dq_j = d_r_dq[j]; 
+            let dg_body_dqj = dr_dq_j.transpose() * g_ned;
+            
+            for i in 0..3 {
+                h[(3 + i, 12 + j)] = -dg_body_dqj[i];
+            }
+        }
+    }
+
+    h
 }
