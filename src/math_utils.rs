@@ -1,6 +1,6 @@
 use core::f32;
 use nalgebra::{Matrix3, Matrix4, Quaternion, SMatrix, SVector, UnitQuaternion, Vector3};
-use libm::{powf, sincosf, sqrtf, fabsf, cos, sin, atan2f, sqrt, sincos, atan2, cosf, sinf};
+use libm::{powf, sqrtf, fabsf, cos, sin, sqrt, sincos, atan2};
 
 #[derive(Debug, Default, Clone)]
 
@@ -54,11 +54,6 @@ pub struct FlightManager{
     pub altitude_window: Vec<f64>,
 }
 
-pub struct RawSensorData{
-    times: Vec<f64>,
-    values: Vec<f64>,
-}
-
 
 pub fn pres_to_alt(pres: f32) -> f32{
     //44_330.0 * (1.0 - powf(pres/101274.697, 1.0/5.255)) //Graz
@@ -110,60 +105,6 @@ pub fn quaternion_rotation_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
     ]
 }
 
-pub fn compute_d_rotation_d_quaternion_old(q: &[f64; 4]) -> [[[f64; 3]; 4]; 3] {
-
-    // Compute derivative of rotation matrix w.r.t. quaternion components
-    // Returns tensor of shape (4, 3, 3) where:
-        // result[j] = dR/dq_j for j in (0,1,2,3)
-
-    let w = q[0];
-    let x = q[1];
-    let y = q[2];
-    let z = q[3];
-
-    let mut dr_dq = [[[0.0f64; 3]; 3]; 4];
-
-    // dR/dw
-    dr_dq[0] = [
-        [0.0, -2.0 * z, 2.0 * y],
-        [2.0 * z, 0.0, -2.0 * x],
-        [-2.0 * y, 2.0 * x, 0.0],
-    ];
-
-    // dR/dx
-    dr_dq[1] = [
-        [2.0 * x, 2.0 * y, 2.0 * z],
-        [2.0 * y, -2.0 * x, -2.0 * w],
-        [2.0 * z, 2.0 * w, -2.0 * x],
-    ];
-
-    // dR/dy
-    dr_dq[2] = [
-        [-2.0 * y, 2.0 * x, 2.0 * w],
-        [2.0 * x, 2.0 * y, 2.0 * z],
-        [-2.0 * w, 2.0 * z, -2.0 * y],
-    ];
-
-    // dR/dz
-    dr_dq[3] = [
-        [-2.0 * z, -2.0 * w, 2.0 * x],
-        [2.0 * w, -2.0 * z, 2.0 * y],
-        [2.0 * x, 2.0 * y, 2.0 * z],
-    ];
-
-    let mut result = [[[0.0f64; 3]; 4]; 3];
-    for i in 0..3 {
-        for j in 0..4 {
-            for k in 0..3 {
-                result[i][j][k] = dr_dq[j][i][k];
-            }
-        }
-    }
-
-    result
-}
-
-
 pub fn compute_d_rotation_d_quaternion(q: &[f64; 4]) -> [Matrix3<f64>; 4] {
     // q[0]=w, q[1]=x, q[2]=y, q[3]=z (Annahme: Hamilton-Notation)
     let w = q[0];
@@ -201,26 +142,6 @@ pub fn compute_d_rotation_d_quaternion(q: &[f64; 4]) -> [Matrix3<f64>; 4] {
 
     [dr_dw, dr_dx, dr_dy, dr_dz]
 }
-pub fn latlonh_to_ecef_old(lat_deg: f32, lon_deg: f32, h_m: f32) -> [f32; 3] {
-    // WGS84 consts
-    let a: f32 = 6_378_137.0;
-    let e_sq: f32 = 0.00669437999014;
-
-    let lat = lat_deg.to_radians();
-    let lon = lon_deg.to_radians();
-
-    let (sin_lat, cos_lat) = sincosf(lat);
-    let (sin_lon, cos_lon) = sincosf(lon);
-
-    let n = sqrtf( a / (1.0 - e_sq * sin_lat * sin_lat));
-
-    let x = (n + h_m) * cos_lat * cos_lon;
-    let y = (n + h_m) * cos_lat * sin_lon;
-    let z = (n * (1.0 - e_sq) + h_m) * sin_lat;
-
-    [x, y, z]
-}
-
 pub fn latlonh_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
     // WGS84 consts
     let a: f64 = 6_378_137.0;
@@ -239,20 +160,6 @@ pub fn latlonh_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
     let z = (n * (1.0 - e_sq) + h_m) * sin_lat;
 
     [x, y, z]
-}
-
-pub fn ecef_to_ned_matrix_old(lat_ref_deg: f32, lon_ref_deg: f32) -> [[f32; 3]; 3] {
-    let lat = lat_ref_deg.to_radians();
-    let lon = lon_ref_deg.to_radians();
-    
-    let (sin_lat, cos_lat) = sincosf(lat);
-    let (sin_lon, cos_lon) = sincosf(lon);
-    
-    [
-        [-sin_lat * cos_lon, -sin_lat * sin_lon,  cos_lat],
-        [-sin_lon,            cos_lon,            0.0    ],
-        [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat]
-    ]
 }
 
 
@@ -325,24 +232,6 @@ pub fn quaternion_from_vectors(v1_in: [f32; 3], v2_in: [f32; 3]) -> [f32; 4] {
     [0.0, axis[0] / a_norm, axis[1] / a_norm, axis[2] / a_norm]
 }
 
-pub fn gps_to_ned_old(lat: f32, lon: f32, h: f32, lat_ref: f32, lon_ref: f32, alt_ref: f32) -> [f32; 3] {
-    let ecef_ref = latlonh_to_ecef_old(lat_ref, lon_ref, alt_ref);
-    let r = ecef_to_ned_matrix_old(lat_ref, lon_ref);
-    let ecef_current = latlonh_to_ecef_old(lat, lon, h);
-    
-    let delta_ecef = [
-        ecef_current[0] - ecef_ref[0],
-        ecef_current[1] - ecef_ref[1],
-        ecef_current[2] - ecef_ref[2],
-    ];
-
-    [
-        r[0][0] * delta_ecef[0] + r[0][1] * delta_ecef[1] + r[0][2] * delta_ecef[2],
-        r[1][0] * delta_ecef[0] + r[1][1] * delta_ecef[1] + r[1][2] * delta_ecef[2],
-        r[2][0] * delta_ecef[0] + r[2][1] * delta_ecef[1] + r[2][2] * delta_ecef[2],
-    ]
-}
-
 pub fn gps_to_ned(lat: f64, lon: f64, h: f64, lat_ref: f64, lon_ref: f64, alt_ref: f64) -> [f64; 3] {
     let ecef_ref_arr = latlonh_to_ecef(lat_ref, lon_ref, alt_ref);
     let ecef_ref = Vector3::from(ecef_ref_arr);
@@ -357,62 +246,6 @@ pub fn gps_to_ned(lat: f64, lon: f64, h: f64, lat_ref: f64, lon_ref: f64, alt_re
     let ned = r * delta_ecef;
 
     [ned.x, ned.y, ned.z]
-}
-
-pub fn ned_to_gps_old(ned: [f32; 3], lat_ref: f32, lon_ref: f32, alt_ref: f32) -> (f32, f32, f32) {
-
-    // Transform NED coordinates back to geodetic coordinates
-    // ned: north, east, down relative to reference
-    // Returns lat_deg, long_deg, alt_m
-    let r = ecef_to_ned_matrix_old(lat_ref, lon_ref);
-    
-    let delta_ecef = [
-        r[0][0] * ned[0] + r[1][0] * ned[1] + r[2][0] * ned[2],
-        r[0][1] * ned[0] + r[1][1] * ned[1] + r[2][1] * ned[2],
-        r[0][2] * ned[0] + r[1][2] * ned[1] + r[2][2] * ned[2],
-    ];
-    
-    // ecef_ref = latlonh_to_ecef(lat_ref, lon_ref, alt_ref)
-    let ecef_ref = latlonh_to_ecef_old(lat_ref, lon_ref, alt_ref);
-    
-    // ecef_current = ecef_ref + delta_ecef
-    let ecef_current = [
-        ecef_ref[0] + delta_ecef[0],
-        ecef_ref[1] + delta_ecef[1],
-        ecef_ref[2] + delta_ecef[2],
-    ];
-
-    // ECEF to Geodetic (WGS84)
-    let a = 6378137.0;
-    let b = 6356752.314245;
-    let e_sq = 0.00669437999014;
-    let ep_sq = 0.00673949674228;
-
-    let x = ecef_current[0];
-    let y = ecef_current[1];
-    let z = ecef_current[2];
-
-    let p = sqrtf(x * x + y * y);
-    let th = atan2f(a * z, b * p);
-
-    let sin_th = sinf(th);
-    let cos_th = cosf(th);
-
-    let lat_rad = atan2f(
-        z + ep_sq * b * sin_th * sin_th * sin_th,
-        p - e_sq * a * cos_th * cos_th * cos_th,
-    );
-    let lon_rad = atan2f(y, x);
-
-    let sin_lat = sinf(lat_rad);
-    let n = a / sqrtf(1.0 - e_sq * sin_lat * sin_lat);
-    let alt = (p / cosf(lat_rad)) - n;
-
-    (
-        lat_rad * (180.0 / core::f32::consts::PI),
-        lon_rad * (180.0 / core::f32::consts::PI),
-        alt,
-    )
 }
 
 pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -> (f64, f64, f64) {
@@ -463,35 +296,6 @@ pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -
         alt,
     )
 }
-// pub fn build_dataframe(mut data: FlightData) -> Option<FlightData> {
-//     if data.alt == 0.0 {
-//         return None;
-//     }
-// 
-//     data.accel_x_1 /= 100.0;
-//     data.accel_y_1 /= 100.0;
-//     data.accel_z_1 /= 100.0;
-//     data.accel_x_2 /= 100.0;
-//     data.accel_y_2 /= 100.0;
-//     data.accel_z_2 /= 100.0;
-// 
-//     data.gyro_pitch = -data.gyro_pitch;
-//     data.gyro_pitch_2 = -data.gyro_pitch_2;
-// 
-//     data.accel_y = -data.accel_y;
-//     data.accel_y_2 = -data.accel_y_2;
-// 
-//     if data.pressure < 0.0 {
-//         // Hier müsste im echten System der ffill-Wert eingesetzt werden
-//         return None; 
-//     }
-// 
-//     // data['pressure'] = data['pressure'].apply(pres_to_alt)
-//     data.pressure = pres_to_alt(data.pressure);
-// 
-//     Some(data)
-// }
-
 
 pub fn get_reference_coordinates_new(data: &FlightData)-> (f64, f64, f64){
     for i in 0..data.lat.len() {
@@ -531,6 +335,7 @@ pub fn normalize_quaternion(quaternion: [f64; 4]) -> [f64; 4] {
 
 
 pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
+    println!("ich bin state_transition - new iteration");
     let mut next_state = *state;
 
     // Position (NED) = pos + vel * dt
@@ -540,7 +345,7 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
 
     // Rotation matrix
     let q = UnitQuaternion::from_quaternion(Quaternion::new(
-        state[15], state[12], state[13], state[14] // w, x, y, z
+        state[12], state[13], state[14], state[15] // w, x, y, z
     ));
     let r_body_to_ned = q.to_rotation_matrix();
 
@@ -577,6 +382,7 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
     );
 
     let current_q = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
+    //println!("current_q: {:.3}", {current_q});
     let next_q = (q_alt * current_q).normalize();
 
     next_state[12] = next_q[0];
@@ -591,8 +397,15 @@ pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f
     let mut f = SMatrix::<f64, 23, 23>::identity(); // Diagonaleinträge = 1
     
     // Quaternion of state
-    let q_vec = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
+    //let q_vec = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
+    let q_w = state[12];
+    let q_x = state[13];
+    let q_y = state[14];
+    let q_z = state[15];
+
+    let q_vec = SVector::<f64, 4>::new(q_x, q_y, q_z, q_w); 
     let q = UnitQuaternion::from_quaternion(Quaternion::from_vector(q_vec));
+    //println!("Ich bin ein Quaternion {:.3}", q);
     let r = q.to_rotation_matrix();
 
     // Python: F[3:6, 6:9] = R * dt

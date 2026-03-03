@@ -1,9 +1,10 @@
-use std::{fs::File, time::Instant};
+use std::{fs::File};
 use std::error::Error;
-use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
-use crate::math_utils::{self, ecef_to_ned_matrix, get_reference_coordinates_new, latlonh_to_ecef, measurement_function, measurement_jacobian, normalize_quaternion, state_transition, state_transition_jacobian, FlightManager, RocketEKF, FlightData};
+use nalgebra::{DMatrix, DVector, SMatrix, SVector, UnitQuaternion, Vector3};
+use crate::math_utils::{ecef_to_ned_matrix, latlonh_to_ecef, measurement_function, measurement_jacobian, normalize_quaternion, state_transition, state_transition_jacobian, FlightManager, RocketEKF, FlightData};
+use csv::Writer;
 
-const CALIBRAION_DURATION: f64 = 0.5;
+//const CALIBRAION_DURATION: f64 = 0.5;
 
 fn open_csv(path: &str, limit:usize, step: usize, row: usize) -> Result<(Vec<f64>, Vec<f32>), Box<dyn Error>> {
     let file = File::open(path)?;
@@ -67,45 +68,83 @@ fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usiz
     v0 + (v1 - v0) * (target_t - t0) / (t1 - t0)
 }
 
+pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
+    let base_path = "./src/data_set_1/";
+    let files = vec![
+        "FSMS_ACC_Z_1.csv", "FSMS_ACC_Y_1.csv", "FSMS_ACC_X_1.csv",
+        "FSMS_ACC_Z_2.csv", "FSMS_ACC_Y_2.csv", "FSMS_ACC_X_2.csv",
+        "FSMS_GYRO_Z_1.csv", "FSMS_GYRO_Y_1.csv", "FSMS_GYRO_X_1.csv",
+        "FSMS_GYRO_Z_2.csv", "FSMS_GYRO_Y_2.csv", "FSMS_GYRO_X_2.csv",
+        "FSMS_PRESSURE.csv", 
+        "FSMS_PX_LAT.csv", "FSMS_PX_LONG.csv", "FSMS_PX_HEIGHT.csv",
+        "FSMS_ECEF_X.csv", "FSMS_ECEF_Y.csv", "FSMS_ECEF_Z.csv",
+    ];
+
+    let mut all_timestamps = Vec::new();
+
+    for file_name in &files {
+        let path = format!("{}{}", base_path, file_name);
+        
+         if let Ok((times, _)) = open_csv_64(&path, 280000, 10, 1) {
+            all_timestamps.extend(times);
+         }   
+    }
+
+    if all_timestamps.is_empty() {
+        return Err("time is an illusion".into());
+    }
+
+    all_timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_timestamps.dedup();
+
+    Ok(all_timestamps)
+}
 
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
     let limit = 280000;
     let step = 10;
-
-    let (raw_times, accel_x_1_raw) = open_csv(&format!("{}FSMS_ACC_Z_1.csv", base_path), limit, step, 1)?;
-    let t_start = raw_times[0];
-    let timestamps: Vec<f64> = raw_times.iter().map(|t| (t - t_start) / 1000.0).collect();
     
-    let sync_f32 = |name: &str| -> Result<Vec<f32>, Box<dyn Error>> {
+    let master_raw_times = get_times()?;
+    let t0 = master_raw_times[0];
+    let timestamps: Vec<f64> = master_raw_times.iter()
+        .map(|t| (t - t0) / 100000.0)
+        .collect();
+    
+    let sync_f32_scaled = |name: &str, scale: f32, invert: bool| -> Result<Vec<f32>, Box<dyn Error>> {
         let (s_times, s_vals) = open_csv(&format!("{}{}", base_path, name), limit, step, 1)?;
         let mut last_idx = 0;
         let s_vals_f64: Vec<f64> = s_vals.iter().map(|&v| v as f64).collect();
-        Ok(raw_times.iter().map(|&t| interpolate(t, &s_times, &s_vals_f64, &mut last_idx) as f32).collect())
+        
+        Ok(master_raw_times.iter().map(|&t| {
+            let val = interpolate(t, &s_times, &s_vals_f64, &mut last_idx) as f32;
+            let scaled = val / scale;
+            if invert { -scaled } else { scaled }
+        }).collect())
     };
 
     let sync_f64 = |name: &str| -> Result<Vec<f64>, Box<dyn Error>> {
         let (s_times, s_vals) = open_csv_64(&format!("{}{}", base_path, name), limit, step, 1)?;
         let mut last_idx = 0;
-        Ok(raw_times.iter().map(|&t| interpolate(t, &s_times, &s_vals, &mut last_idx)).collect())
+        Ok(master_raw_times.iter().map(|&t| interpolate(t, &s_times, &s_vals, &mut last_idx)).collect())
     };
 
     let data = FlightData {
-        accel_x_1: accel_x_1_raw,
-        accel_y_1: sync_f32("FSMS_ACC_Y_1.csv")?,
-        accel_z_1: sync_f32("FSMS_ACC_X_1.csv")?,
+        accel_x_1: sync_f32_scaled("FSMS_ACC_Z_1.csv", 100.0, false)?,
+        accel_y_1: sync_f32_scaled("FSMS_ACC_Y_1.csv", 100.0, true)?, 
+        accel_z_1: sync_f32_scaled("FSMS_ACC_X_1.csv", 100.0, false)?,
 
-        accel_x_2: sync_f32("FSMS_ACC_Z_2.csv")?,
-        accel_y_2: sync_f32("FSMS_ACC_Y_2.csv")?,
-        accel_z_2: sync_f32("FSMS_ACC_X_2.csv")?,
+        accel_x_2: sync_f32_scaled("FSMS_ACC_Z_2.csv", 100.0, false)?,
+        accel_y_2: sync_f32_scaled("FSMS_ACC_Y_2.csv", 100.0, true)?,
+        accel_z_2: sync_f32_scaled("FSMS_ACC_X_2.csv", 100.0, false)?,
 
-        roll_1: sync_f32("FSMS_GYRO_Z_1.csv")?,
-        pitch_1: sync_f32("FSMS_GYRO_Y_1.csv")?,
-        yaw_1: sync_f32("FSMS_GYRO_X_1.csv")?,
+        roll_1:  sync_f32_scaled("FSMS_GYRO_Z_1.csv", 1.0, false)?,
+        pitch_1: sync_f32_scaled("FSMS_GYRO_Y_1.csv", 1.0, true)?, 
+        yaw_1:   sync_f32_scaled("FSMS_GYRO_X_1.csv", 1.0, false)?,
 
-        roll_2: sync_f32("FSMS_GYRO_Z_2.csv")?,
-        pitch_2: sync_f32("FSMS_GYRO_Y_2.csv")?,
-        yaw_2: sync_f32("FSMS_GYRO_X_2.csv")?,
+        roll_2:  sync_f32_scaled("FSMS_GYRO_Z_2.csv", 1.0, false)?,
+        pitch_2: sync_f32_scaled("FSMS_GYRO_Y_2.csv", 1.0, true)?,
+        yaw_2:   sync_f32_scaled("FSMS_GYRO_X_2.csv", 1.0, false)?,
 
         lat: sync_f64("FSMS_PX_LAT.csv")?,
         lon: sync_f64("FSMS_PX_LONG.csv")?,
@@ -115,17 +154,61 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         y: sync_f64("FSMS_ECEF_Y.csv")?,
         z: sync_f64("FSMS_ECEF_Z.csv")?,
 
-        pressure: sync_f32("FSMS_PRESSURE.csv")?,
+        pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
     };
-
+    let pathi = "./vsinput.csv";
+    export_flight_data_to_csv(&data, &timestamps, &pathi)?;
     println!("Data synced and loaded into FlightData.");
     Ok((data, timestamps))
 }
 
+
+pub fn export_flight_data_to_csv(data: &FlightData, timestamps: &[f64], file_path: &str) -> Result<(), Box<dyn Error>> {
+    let file = File::create(file_path)?;
+    let mut wtr = Writer::from_writer(file);
+
+    // Header schreiben (identisch zu deinem Python-Output für einfachen Vergleich)
+    wtr.write_record(&[
+        "timestamp", "accel_x_1", "accel_y_1", "accel_z_1", 
+        "gyro_roll_1", "gyro_pitch_1", "gyro_yaw_1", 
+        "pressure_alt", "gps_lat", "gps_lon", "gps_alt"
+    ])?;
+
+    for i in 0..timestamps.len() {
+        wtr.write_record(&[
+            format!("{:.2}", timestamps[i]),
+            format!("{:.2}", data.accel_x_1[i]),
+            format!("{:.2}", data.accel_y_1[i]),
+            format!("{:.2}", data.accel_z_1[i]),
+            format!("{:.2}", data.roll_1[i]),
+            format!("{:.2}", data.pitch_1[i]),
+            format!("{:.2}", data.yaw_1[i]),
+            format!("{:.2}", data.pressure[i]), 
+            format!("{:.2}", data.lat[i]),
+            format!("{:.2}", data.lon[i]),
+            format!("{:.2}", data.alt[i]),
+        ])?;
+    }
+
+    wtr.flush()?;
+    println!("CSV-Export abgeschlossen: {}", file_path);
+    Ok(())
+}
+
+
 // --------------------------Filter --------------------------
 
-pub fn filter(data: &mut FlightData) {
-    let (lat_ref, lon_ref, alt_ref) = get_reference_coordinates_new(&data);
+pub fn init_ekf(data: &mut FlightData) -> RocketEKF{
+
+    let start_idx = data.lat.iter()
+        .position(|&lat| lat.abs() > 0.1)
+        .unwrap_or(0); // Fallback auf 0, falls gar nichts gefunden wird
+
+    let lat_ref = data.lat[start_idx];
+    let lon_ref = data.lon[start_idx];
+    let alt_ref = data.alt[start_idx];
+
+    //let (lat_ref, lon_ref, alt_ref) = get_reference_coordinates_new(&data);
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
     let rotation_matrix = ecef_to_ned_matrix(lat_ref, lon_ref);
 
@@ -144,25 +227,24 @@ pub fn filter(data: &mut FlightData) {
         
     }
     // Initalisierung
-    let calibration_active = false;
-    let calibration_start_time  = Instant::now();
+    //let calibration_active = false;
+    //let calibration_start_time  = Instant::now();
 
-    let mut accel_sums = Vector3::new(0.0, 0.0, 0.0);
-    let mut gyro_sums = Vector3::new(0.0, 0.0, 0.0);
-    let mut g_ned = Vector3::new(0.0, 0.0, 9.8);
+    //let mut accel_sums = Vector3::new(0.0, 0.0, 0.0);
+    //let mut gyro_sums = Vector3::new(0.0, 0.0, 0.0);
 
-    let mut count = 0;
-    let mut calibration_count = 0;
-    let mut last_valid_gps = 0;
+    //let mut count = 0;
+    //let mut calibration_count = 0;
+    //let mut last_valid_gps = 0;
     // Fehlend measurments, measurments_complete, altitudes, accelerations
-    let rocket_started = false;
+    //let rocket_started = false;
 
-
+    let g_ned = Vector3::new(0.0, 0.0, 9.8);
     // Initialization of orientation
     let g_body = Vector3::new(
-        data.accel_x_1[0] as f64, 
-        data.accel_y_1[0] as f64, 
-        data.accel_z_1[0] as f64);
+        data.accel_x_1[start_idx] as f64, 
+        data.accel_y_1[start_idx] as f64, 
+        data.accel_z_1[start_idx] as f64);
     let g_ned_norm = g_ned.normalize();
     let g_body_norm = g_body.normalize();
 
@@ -175,14 +257,14 @@ pub fn filter(data: &mut FlightData) {
     let mut x = StateVector::zeros();
     
     //GPS
-    x[0] = lat_ref;
-    x[1] = lon_ref;
-    x[2] = alt_ref;
+    x[0] = 0.0;
+    x[1] = 0.0;
+    x[2] = 0.0;
     // 3, 4, 5 = 0 -> Speed
     // Acceleration
-    x[6] = data.accel_x_1[0] as f64;
-    x[7] = data.accel_y_1[0] as f64;
-    x[8] = data.accel_z_1[0] as f64;
+    x[6] = data.accel_x_1[start_idx] as f64;
+    x[7] = data.accel_y_1[start_idx] as f64;
+    x[8] = data.accel_z_1[start_idx] as f64;
     // 9, 10, 11 = 0 -> Gyroscop
     // Quaternions
     x[12] = q_i2b[0];
@@ -190,9 +272,12 @@ pub fn filter(data: &mut FlightData) {
     x[14] = q_i2b[2];
     x[15] = q_i2b[3];
     //Biases, 16, 17, 18, 19, 20, 21 = 0
-    x[22] = alt_ref - data.pressure[0] as f64;
+    x[22] = alt_ref - data.pressure[start_idx] as f64;
+    //let pressure_offset = data.pressure[start_idx];
+    //x[22] = 0.0;
 
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
+    //println!("ppppppppppppppppppp: {}", p);
     let mut q = SMatrix::<f64, 23, 23>::identity() * 0.01; // process noise
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
  
@@ -202,22 +287,30 @@ pub fn filter(data: &mut FlightData) {
     r[(1, 1)] = 0.01;
     r[(2, 2)] = 0.01;
 
+    RocketEKF::new(x, p, q, r)
 }
 
 impl RocketEKF{
     pub fn new(initial_state: SVector<f64, 23>, p: SMatrix<f64, 23, 23>, q: SMatrix<f64, 23, 23>, r: SMatrix<f64, 10, 10>) -> Self {
         Self {
             state: initial_state,
-            p,
-            q,
-            r,
+            p, // Kovarianz
+            q, // Prozessrauschen
+            r, // Messrauschen
             baro_needs_sync: false,
         }
     }
     pub fn predict(&mut self, dt: f64){
+        if dt>1.0 { println!("AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+            HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHhh, zeit")};
         let f = state_transition_jacobian(&self.state, dt);
         self.state = state_transition(&self.state, dt);
+        //println!("f {:.3}", f);
+        //println!("p hier hier ist komisch {:.3}", self.p);
+        //println!("f.transpose {:.3}", f.transpose());
+        //println!("q {:.3}", self.q);
         self.p = f * self.p * f.transpose() + self.q;
+
 
 
         let q_slice = self.state.fixed_rows::<4>(12);
@@ -257,6 +350,10 @@ impl RocketEKF{
 
         // Kalman Gain
         let mut s = &h * &self.p * h.transpose() + &r;
+        // println!("h {}", h);
+        // println!("p {}", self.p);
+        // println!("h.transpose {}", h.transpose());
+        // println!("r {}", r);
         s = (&s + s.transpose()) / 2.0;
         
         let s_inv = s.clone().lu().try_inverse().expect("S matrix inversion failed");
@@ -346,19 +443,29 @@ impl FlightManager {
     }
     pub fn run_ekf_on_flightdata(
         &mut self,
-        data: &FlightData,
+        data: &mut FlightData,
         timestamps: &Vec<f64>,
         ekf: &mut RocketEKF,
+        start_idx: usize,
     ) -> Vec<SVector<f64, 23>> 
     {
         let mut estimated_states = Vec::with_capacity(timestamps.len());
-        let mut prev_time = timestamps[0];
+        let mut prev_time = timestamps[start_idx];
         
         let mut z_prev: Option<SVector<f64, 10>> = None;
 
-        for i in 0..timestamps.len() {
+        for i in start_idx..timestamps.len() {
             let current_time = timestamps[i];
             let dt = current_time - prev_time;
+
+            data.roll_1[i]  = data.roll_1[i].to_radians();
+            data.pitch_1[i] = data.pitch_1[i].to_radians();
+            data.yaw_1[i]   = data.yaw_1[i].to_radians();
+
+            data.roll_2[i]  = data.roll_2[i].to_radians();
+            data.pitch_2[i] = data.pitch_2[i].to_radians();
+            data.yaw_2[i]   = data.yaw_2[i].to_radians();
+            
 
             let cur_accel = [
                 (data.accel_x_1[i] + data.accel_x_2[i]) as f64 / 2.0,
@@ -387,16 +494,18 @@ impl FlightManager {
             // calibration
             if self.calibration_active && (current_time - self.calibration_start_time <= 5.0) { // 5s Dauer
                 self.calibration_count += 1;
-                ekf.q.fixed_view_mut::<4, 4>(12, 12).copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
+                //println!("Calibration counter: {}", self.calibration_count);
+                //ekf.q.fixed_view_mut::<4, 4>(12, 12).copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
                 for j in 3..6 { mean_measurement[j] = 0.0; }
             } else if self.calibration_active {
                 self.calibration_active = false;
             }
 
             let total_accel = (cur_accel[0].powi(2) + cur_accel[1].powi(2) + cur_accel[2].powi(2)).sqrt();
-            if total_accel > 12.0 { self.rocket_started = true; }
+            if total_accel > 20.0 { self.rocket_started = true; } //normal 12.0
 
             if self.rocket_started {
+                println!("ROcket started");
                 self.altitude_window.push(ekf.state[2]);
                 if self.altitude_window.len() > 200 { self.altitude_window.remove(0); }
                 let mean_alt: f64 = self.altitude_window.iter().sum::<f64>() / self.altitude_window.len() as f64;
@@ -408,6 +517,7 @@ impl FlightManager {
             // predict
             if dt > 0.0 {
                 ekf.predict(dt);
+                println!("We are predicting, datenpunkt {}", i);
             }
 
             let mut z_measured = SVector::<f64, 10>::zeros();
