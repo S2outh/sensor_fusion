@@ -1,9 +1,9 @@
 use std::{fs::File};
 use std::error::Error;
 use nalgebra::{DMatrix, DVector, SMatrix, SVector, UnitQuaternion, Vector3};
-use crate::math_utils::{ecef_to_ned_matrix, latlonh_to_ecef, measurement_function, measurement_jacobian, normalize_quaternion, state_transition, state_transition_jacobian, FlightManager, RocketEKF, FlightData};
+use crate::math_utils::{ecef_to_ned_matrix, latlonh_to_ecef, measurement_function, measurement_jacobian, normalize_quaternion, pres_to_alt, state_transition, state_transition_jacobian, FlightData, FlightManager, RocketEKF};
 use csv::Writer;
-
+use std::io::{self, Write};
 //const CALIBRAION_DURATION: f64 = 0.5;
 
 fn open_csv(path: &str, limit:usize, step: usize, row: usize) -> Result<(Vec<f64>, Vec<f32>), Box<dyn Error>> {
@@ -85,7 +85,7 @@ pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
     for file_name in &files {
         let path = format!("{}{}", base_path, file_name);
         
-         if let Ok((times, _)) = open_csv_64(&path, 280000, 10, 1) {
+         if let Ok((times, _)) = open_csv_64(&path, 28000, 10, 1) {
             all_timestamps.extend(times);
          }   
     }
@@ -102,10 +102,12 @@ pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
 
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
-    let limit = 280000;
+    let limit = 28000;
     let step = 10;
     
     let master_raw_times = get_times()?;
+    let skip_count = 750;
+    let master_raw_times = &master_raw_times[skip_count..];
     let t0 = master_raw_times[0];
     let timestamps: Vec<f64> = master_raw_times.iter()
         .map(|t| (t - t0) / 100000.0)
@@ -128,6 +130,11 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         let mut last_idx = 0;
         Ok(master_raw_times.iter().map(|&t| interpolate(t, &s_times, &s_vals, &mut last_idx)).collect())
     };
+
+    let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
+    for v in pressure.iter_mut(){
+        *v = pres_to_alt(*v);
+    }
 
     let data = FlightData {
         accel_x_1: sync_f32_scaled("FSMS_ACC_Z_1.csv", 100.0, false)?,
@@ -154,7 +161,8 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         y: sync_f64("FSMS_ECEF_Y.csv")?,
         z: sync_f64("FSMS_ECEF_Z.csv")?,
 
-        pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
+        //pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
+        pressure: pressure,
     };
     let pathi = "./vsinput.csv";
     export_flight_data_to_csv(&data, &timestamps, &pathi)?;
@@ -195,18 +203,31 @@ pub fn export_flight_data_to_csv(data: &FlightData, timestamps: &[f64], file_pat
     Ok(())
 }
 
+fn confirm_data_loading() {
+    println!("\n--- DATEN-CHECK ---");
+    println!("press y to continue");
+    io::stdout().flush().unwrap();
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer).expect("Fehler beim Lesen");
+
+}
 
 // --------------------------Filter --------------------------
 
 pub fn init_ekf(data: &mut FlightData) -> RocketEKF{
-
     let start_idx = data.lat.iter()
         .position(|&lat| lat.abs() > 0.1)
         .unwrap_or(0); // Fallback auf 0, falls gar nichts gefunden wird
 
     let lat_ref = data.lat[start_idx];
+    println!("lat_ref {}", lat_ref);
     let lon_ref = data.lon[start_idx];
+    println!("lon_ref {}", lon_ref);
     let alt_ref = data.alt[start_idx];
+    println!("alt_ref {}", alt_ref);
+
+    confirm_data_loading();
 
     //let (lat_ref, lon_ref, alt_ref) = get_reference_coordinates_new(&data);
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
@@ -287,6 +308,13 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF{
     r[(1, 1)] = 0.01;
     r[(2, 2)] = 0.01;
 
+    println!("p {}", p);
+    println!("q {}", q);
+    println!("x {}", x);
+    println!("r {}", r);
+
+    confirm_data_loading();
+
     RocketEKF::new(x, p, q, r)
 }
 
@@ -306,12 +334,13 @@ impl RocketEKF{
         let f = state_transition_jacobian(&self.state, dt);
         self.state = state_transition(&self.state, dt);
         //println!("f {:.3}", f);
-        //println!("p hier hier ist komisch {:.3}", self.p);
+        println!("p hier hier ist komisch {:.3}", self.p);
         //println!("f.transpose {:.3}", f.transpose());
         //println!("q {:.3}", self.q);
         self.p = f * self.p * f.transpose() + self.q;
-
-
+        println!("Pppppppppppppppppppppppppppppppppppppppp {}", self.p);
+        
+        // confirm_data_loading();
 
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
@@ -350,10 +379,10 @@ impl RocketEKF{
 
         // Kalman Gain
         let mut s = &h * &self.p * h.transpose() + &r;
-        // println!("h {}", h);
-        // println!("p {}", self.p);
-        // println!("h.transpose {}", h.transpose());
-        // println!("r {}", r);
+        //println!("kalman h {}", h);
+        //println!("kalman p {}", self.p);
+        //println!("kalman h.transpose {}", h.transpose());
+        //println!("kalman r {}", r);
         s = (&s + s.transpose()) / 2.0;
         
         let s_inv = s.clone().lu().try_inverse().expect("S matrix inversion failed");
