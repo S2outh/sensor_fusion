@@ -4,7 +4,6 @@ use nalgebra::{Matrix3, Matrix4, Quaternion, SMatrix, SVector, UnitQuaternion, V
 use std::io::{self, Write};
 #[derive(Debug, Default, Clone)]
 
-
 pub struct FlightData {
     pub accel_x_1: Vec<f32>,
     pub accel_y_1: Vec<f32>,
@@ -534,6 +533,7 @@ pub fn measurement_function(
     };
 
     // Expected Baro measurment (hight-baro offset)
+    // NEUE umgedrehte vorzeichen
     let baro_expected = state[2] - state[22];
 
     // Measurment vector

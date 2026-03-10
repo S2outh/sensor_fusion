@@ -142,7 +142,9 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
     let master_raw_times = get_times()?;
     //let start_timestamp = 11179.65185;
-    let start_timestamp = 17077.09405;
+    //let start_timestamp = 17077.09405;
+    
+    let start_timestamp = 486612436.0/100000.0;
     //let skip_count = 7512;
     let skip_count = 1;
     let master_raw_times = &master_raw_times[skip_count..];
@@ -178,14 +180,15 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     };
 
     let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
-    let mut pre: f32 = 100_000.0;
+    let mut prev_valid_pressure: f32 = 100_000.0;
     for v in pressure.iter_mut() {
-        if *v < 0.0 {
-            *v = pres_to_alt(pre);
+        let p = if *v > 0.0 {
+            prev_valid_pressure = *v;
+            *v
         } else {
-            *v = pres_to_alt(*v);
-        }
-        pre = *v;
+            prev_valid_pressure
+        };
+        *v = pres_to_alt(p);
     }
 
     let data = FlightData {
@@ -243,6 +246,9 @@ pub fn export_flight_data_to_csv(
         "gps_lat",
         "gps_lon",
         "gps_alt",
+        "ecef_x",
+        "ecef_y",
+        "ecef_z",
     ])?;
 
     for i in 0..timestamps.len() {
@@ -255,9 +261,12 @@ pub fn export_flight_data_to_csv(
             format!("{:.2}", data.pitch_1[i]),
             format!("{:.2}", data.yaw_1[i]),
             format!("{:.2}", data.pressure[i]),
-            format!("{:.2}", data.lat[i]),
-            format!("{:.2}", data.lon[i]),
-            format!("{:.2}", data.alt[i]),
+            format!("{:.5}", data.lat[i]),
+            format!("{:.5}", data.lon[i]),
+            format!("{:.5}", data.alt[i]),
+            format!("{:.2}", data.x[i]),
+            format!("{:.2}", data.y[i]),
+            format!("{:.2}", data.z[i]),
         ])?;
     }
 
@@ -287,13 +296,14 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         .unwrap_or(0); // Fallback auf 0, falls gar nichts gefunden wird
 
     let lat_ref = data.lat[start_idx];
-    //println!("lat_ref {}", lat_ref);
+    println!("lat_ref {}", lat_ref);
     let lon_ref = data.lon[start_idx];
-    //println!("lon_ref {}", lon_ref);
+    println!("lon_ref {}", lon_ref);
     let alt_ref = data.alt[start_idx];
-    //println!("alt_ref {}", alt_ref);
+    println!("alt_ref {}", alt_ref);
+    println!("start_idk {}", start_idx);
+    confirm();
 
-    //let (lat_ref, lon_ref, alt_ref) = get_reference_coordinates_new(&data);
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
     let rotation_matrix = ecef_to_ned_matrix(lat_ref, lon_ref);
 
@@ -306,9 +316,10 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         data.y[i] = ned.y; //East
         data.z[i] = ned.z; //Down
 
-        data.roll_1[i] = data.roll_1[i].to_radians();
-        data.pitch_1[i] = data.pitch_1[i].to_radians();
-        data.yaw_1[i] = data.yaw_1[i].to_radians();
+        // wird schon umgewandelt in run_ekf_on_flightdata
+        //data.roll_1[i] = data.roll_1[i].to_radians();
+        //data.pitch_1[i] = data.pitch_1[i].to_radians();
+        //data.yaw_1[i] = data.yaw_1[i].to_radians();
     }
     // Initalisierung
     //let calibration_active = false;
@@ -332,11 +343,11 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     );
     let g_ned_norm = g_ned.normalize();
     let g_body_norm = g_body.normalize();
- 
-    // Quaternion (Rotationn from NED to body)
+
+    // Quaternion (lRotationn from NED to body)
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
 
-    println!( "whup whup quat {}", q_i2b);
+    println!("whup whup quat {}", q_i2b);
 
     // Kalman matrix initialization
     type StateVector = SVector<f64, 23>;
@@ -407,7 +418,7 @@ impl RocketEKF {
         //println!("geht das? {}", self.state);
         let f = state_transition_jacobian(&self.state, dt);
         if f.iter().any(|&x| x.is_nan()) {
-           // println!("f after state_transition jacobian {}", f);
+            // println!("f after state_transition jacobian {}", f);
         }
         self.state = state_transition(&self.state, dt);
         //println!("f {:.3}", f);
@@ -420,7 +431,6 @@ impl RocketEKF {
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         let q_norm = normalize_quaternion(q_raw);
-        
 
         self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
     }
@@ -497,6 +507,7 @@ impl RocketEKF {
 
             if h_innovation.abs() > 1000.0 {
                 println!("Wiiiiiiiiiirrrrrrr sind fett;");
+
                 self.state[0] = z_measured[0];
                 self.state[1] = z_measured[1];
                 self.state[2] = z_measured[2];
@@ -507,8 +518,6 @@ impl RocketEKF {
                     .fixed_view_mut::<3, 3>(0, 0)
                     .copy_from(&(self.r.fixed_view::<3, 3>(0, 0) * 5.0));
 
-                // In Rust setzen wir r-Werte im Update-Schritt nur lokal für die Rechnung um
-                // Da R in Python self.R ist, passen wir hier self.r an:
                 let mut r_gps = self.r.fixed_view_mut::<3, 3>(0, 0);
                 r_gps *= 5.0;
 
@@ -548,7 +557,7 @@ impl RocketEKF {
             self.state[15],
         ];
         let q_norm = normalize_quaternion(q_raw);
-        
+
         self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
 
         // Covarianzmatrix symmetrical
@@ -646,12 +655,13 @@ impl FlightManager {
 
             let total_accel =
                 (cur_accel[0].powi(2) + cur_accel[1].powi(2) + cur_accel[2].powi(2)).sqrt();
-            if total_accel > 20.0 {
+            if total_accel > 12.0 {
                 self.rocket_started = true;
             } //normal 12.0
 
             if self.rocket_started {
                 println!("ROcket started");
+                confirm();
                 self.altitude_window.push(ekf.state[2]);
                 if self.altitude_window.len() > 200 {
                     self.altitude_window.remove(0);
@@ -672,6 +682,11 @@ impl FlightManager {
             z_measured[0] = data.lat[i];
             z_measured[1] = data.lon[i];
             z_measured[2] = data.alt[i];
+            //NEUE
+
+            //z_measured[0] = data.x[i];
+            //z_measured[1] = data.y[i];
+            //z_measured[2] = data.z[i];
             for j in 0..6 {
                 z_measured[3 + j] = mean_measurement[j];
             }
