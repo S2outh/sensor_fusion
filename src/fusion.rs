@@ -363,11 +363,34 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
     // increasing process noise for baro, reducing measurment noise for gps
-    q[(22, 22)] = 1.0;
-    r[(0, 0)] = 0.01;
-    r[(1, 1)] = 0.01;
-    r[(2, 2)] = 0.01;
+    let gps_pos_std = 50.0_f64;
+    let gps_alt_std = 50.0_f64;
+    let baro_alt_std = 200.0_f64;
+    let accel_std = 1.5_f64;
+    let gyro_std = 0.1_f64;
 
+    let deg_per_meter = 1.0 / 111132.0;
+
+    // GPS position (lat, lon in degrees, alt in meters)
+    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    r[(2, 2)] = gps_alt_std.powi(2);                   // alt
+
+    // Accelerometer (indices 3–5)
+    r[(3, 3)] = accel_std.powi(2);
+    r[(4, 4)] = accel_std.powi(2);
+    r[(5, 5)] = accel_std.powi(2);
+
+    // Gyroscope (indices 6–8)
+    r[(6, 6)] = gyro_std.powi(2);
+    r[(7, 7)] = gyro_std.powi(2);
+    r[(8, 8)] = gyro_std.powi(2);
+
+    // Barometer alt (index 9)
+    r[(9, 9)] = baro_alt_std.powi(2);
+
+    // Process noise for baro state
+    q[(22, 22)] = 1.0;
     // println!("p {}", p);
     //  println!("q {}", q);
     //  println!("x {}", x);
