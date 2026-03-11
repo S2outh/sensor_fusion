@@ -581,7 +581,6 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
     h[(7, 10)] = 1.0;
     h[(8, 11)] = 1.0;
 
-    // TODO: Verstehen
     let accel_norm = (state.fixed_rows::<3>(6)).norm();
     if (accel_norm - 9.81).abs() < 1e-2 {
         let q = [state[12], state[13], state[14], state[15]]; // x, y, z, w

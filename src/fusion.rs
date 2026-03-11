@@ -9,7 +9,6 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
 use std::{f32, usize};
-//const CALIBRAION_DURATION: f64 = 0.5;
 
 fn open_csv(
     path: &str,
@@ -22,7 +21,6 @@ fn open_csv(
     let mut values = Vec::new();
     let mut times = Vec::new();
 
-    //Limit for testen, only every 10th data point
     for (i, result) in rdr.records().enumerate() {
         if i >= limit {
             break;
@@ -51,7 +49,6 @@ fn open_csv_64(
     let mut values = Vec::new();
     let mut times = Vec::new();
 
-    //Limit for testen, only every 10th data point
     for (i, result) in rdr.records().enumerate() {
         if i >= limit {
             break;
@@ -233,7 +230,6 @@ pub fn export_flight_data_to_csv(
     let file = File::create(file_path)?;
     let mut wtr = Writer::from_writer(file);
 
-    // Header schreiben (identisch zu deinem Python-Output für einfachen Vergleich)
     wtr.write_record(&[
         "timestamp",
         "accel_x_1",
@@ -321,18 +317,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         //data.pitch_1[i] = data.pitch_1[i].to_radians();
         //data.yaw_1[i] = data.yaw_1[i].to_radians();
     }
-    // Initalisierung
-    //let calibration_active = false;
-    //let calibration_start_time  = Instant::now();
-
-    //let mut accel_sums = Vector3::new(0.0, 0.0, 0.0);
-    //let mut gyro_sums = Vector3::new(0.0, 0.0, 0.0);
-
-    //let mut count = 0;
-    //let mut calibration_count = 0;
-    //let mut last_valid_gps = 0;
-    // Fehlend measurments, measurments_complete, altitudes, accelerations
-    //let rocket_started = false;
 
     let g_ned = Vector3::new(0.0, 0.0, 9.8);
     // Initialization of orientation
@@ -415,18 +399,12 @@ impl RocketEKF {
             );
             confirm();
         };
-        //println!("geht das? {}", self.state);
         let f = state_transition_jacobian(&self.state, dt);
         if f.iter().any(|&x| x.is_nan()) {
             // println!("f after state_transition jacobian {}", f);
         }
         self.state = state_transition(&self.state, dt);
-        //println!("f {:.3}", f);
-        //println!("p hier hier ist komisch {:.3}", self.p);
-        //println!("f.transpose {:.3}", f.transpose());
-        //println!("q {:.3}", self.q);
         self.p = f * self.p * f.transpose() + self.q;
-        //println!("Pppppppppppppppppppppppppppppppppppppppp {}", self.p);
 
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
@@ -506,7 +484,6 @@ impl RocketEKF {
             let h_innovation = innovation[h_idx_in_innovation];
 
             if h_innovation.abs() > 1000.0 {
-                println!("Wiiiiiiiiiirrrrrrr sind fett;");
 
                 self.state[0] = z_measured[0];
                 self.state[1] = z_measured[1];
@@ -657,11 +634,11 @@ impl FlightManager {
                 (cur_accel[0].powi(2) + cur_accel[1].powi(2) + cur_accel[2].powi(2)).sqrt();
             if total_accel > 12.0 {
                 self.rocket_started = true;
-            } //normal 12.0
+            }
 
             if self.rocket_started {
                 println!("ROcket started");
-                confirm();
+                //confirm();
                 self.altitude_window.push(ekf.state[2]);
                 if self.altitude_window.len() > 200 {
                     self.altitude_window.remove(0);
