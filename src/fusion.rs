@@ -343,24 +343,21 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[2] = 0.0;
     // 3, 4, 5 = 0 -> Speed
     // Acceleration
-    x[6] = data.accel_x_1[start_idx] as f64;
-    x[7] = data.accel_y_1[start_idx] as f64;
-    x[8] = data.accel_z_1[start_idx] as f64;
     // 9, 10, 11 = 0 -> Gyroscop
     // Quaternions x, y, z, w
-    x[12] = q_i2b[1];
-    x[13] = q_i2b[2];
-    x[14] = q_i2b[3];
-    x[15] = q_i2b[0];
-    //Biases, 16, 17, 18, 19, 20, 21 = 0
+    x[6] = q_i2b[1];
+    x[7] = q_i2b[2];
+    x[8] = q_i2b[3];
+    x[9] = q_i2b[0];
+    //Biases, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 = 0
     //x[22] = alt_ref - data.pressure[start_idx] as f64;
     //let pressure_offset = data.pressure[start_idx];
     x[22] = 0.0;
 
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
     //println!("ppppppppppppppppppp: {}", p);
-    let mut q = SMatrix::<f64, 23, 23>::identity() * 0.01; // process noise
-    let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
+    let mut q = SMatrix::<f64, 23, 23>::identity() * 0.001; // process noise
+    let mut r = SMatrix::<f64, 10, 10>::identity() * 0.001; // measurment noise
 
     // increasing process noise for baro, reducing measurment noise for gps
     let gps_pos_std = 50.0_f64;
