@@ -497,44 +497,7 @@ impl RocketEKF {
             //println!("z: {}", z_measured[current_idx]);
             //println!("z_pred: {}", z_pred[i])
         }
-
-        // Catcht suddenly GPS intro
-        if idx.contains(&2) {
-            let h_idx_in_innovation = idx.iter().position(|&x| x == 2).unwrap();
-            let h_innovation = innovation[h_idx_in_innovation];
-
-            if h_innovation.abs() > 1000.0 {
-
-                self.state[0] = z_measured[0];
-                self.state[1] = z_measured[1];
-                self.state[2] = z_measured[2];
-
-                self.p[(22, 22)] = 100.0;
-                innovation[h_idx_in_innovation] = 0.0;
-                self.p
-                    .fixed_view_mut::<3, 3>(0, 0)
-                    .copy_from(&(self.r.fixed_view::<3, 3>(0, 0) * 5.0));
-
-                let mut r_gps = self.r.fixed_view_mut::<3, 3>(0, 0);
-                r_gps *= 5.0;
-
-                self.p.fixed_view_mut::<3, 3>(0, 3).scale_mut(0.05);
-                self.p.fixed_view_mut::<3, 3>(3, 0).scale_mut(0.05);
-                self.baro_needs_sync = true;
-            }
-        }
-
-        // Baro Sync after intro GPS
-        if idx.contains(&9) {
-            let b_idx = idx.iter().position(|&x| x == 9).unwrap();
-            if self.baro_needs_sync {
-                let baro_meas = z_measured[9];
-                self.state[22] = self.state[2] - baro_meas;
-                self.baro_needs_sync = false;
-                self.p[(22, 22)] = 100.0;
-                innovation[b_idx] = 0.0;
-            }
-        }
+        
         let correction = &k * innovation;
         self.state += correction;
         // Kovarianz (Joseph Form)
@@ -548,10 +511,10 @@ impl RocketEKF {
 
         // quaternion normalize
         let q_raw = [
-            self.state[12],
-            self.state[13],
-            self.state[14],
-            self.state[15],
+            self.state[6],
+            self.state[7],
+            self.state[8],
+            self.state[9],
         ];
         let q_norm = normalize_quaternion(q_raw);
 
