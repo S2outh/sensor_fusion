@@ -32,9 +32,9 @@ pub struct FlightData {
 }
 
 pub struct RocketEKF {
-    pub state: SVector<f64, 23>,
-    pub p: SMatrix<f64, 23, 23>,
-    pub q: SMatrix<f64, 23, 23>,
+    pub state: SVector<f64, 17>,
+    pub p: SMatrix<f64, 17, 17>,
+    pub q: SMatrix<f64, 17, 17>,
     pub r: SMatrix<f64, 10, 10>,
     pub baro_needs_sync: bool,
 }
@@ -45,8 +45,10 @@ pub struct FlightManager {
     pub calibration_active: bool,
     pub calibration_start_time: f64,
     pub calibration_count: usize,
-    pub last_valid_gps: usize,
-
+    pub block_gps: bool,
+    pub valid_gps_lat: f64,
+    pub valid_gps_lon: f64,
+    pub valid_gps_alt: f64,
     // Ringpuffer für den Tiefpass
     pub accel_gyro_window: Vec<[f64; 6]>,
     pub altitude_window: Vec<f64>,
@@ -369,20 +371,17 @@ pub fn normalize_quaternion(quaternion: [f64; 4]) -> [f64; 4] {
     ]
 }
 
-pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
-    println!("ich bin state_transition - new iteration");
+pub fn state_transition(state: &SVector<f64, 17>, dt: f64,  mean_measurement: &[f64; 6], ref_gps: &[f64; 3]) -> SVector<f64, 17> {
+    //println!("ich bin state_transition - new iteration");
     let mut next_state = *state;
-
-    // Position (NED) = pos + vel * dt
-    next_state[0] += state[3] * dt; // North
-    next_state[1] += state[4] * dt; // East
-    next_state[2] += state[5] * dt; // Down
+    let accel = &mean_measurement[0..3];
+    let gyro  = &mean_measurement[3..6];
 
     // Rotation matrix
     let q = UnitQuaternion::from_quaternion(Quaternion::new(
-        state[12], state[13], state[14], state[15], // w, x, y, z
+        state[6], state[7], state[8], state[9], // w, x, y, z
     ));
-    println!("qqqqqqqqqqqqqqqq {}", q);
+    println!("Höhe {}", -state[2]);
     let r_body_to_ned = q.to_rotation_matrix();
 
     // Gravitation matrix on body
@@ -391,10 +390,11 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
 
     // acceleration withouth gravitation
     let a_body = Vector3::new(
-        state[6] + state[16],
-        state[7] + state[17],
-        state[8] + state[18],
+        accel[0] - state[10],
+        accel[1] - state[11],
+        accel[2] - state[12],
     ) + g_body;
+    println!("accel {}", a_body[2]);
     let mut a_ned = r_body_to_ned * a_body;
 
     // Deadzone
@@ -402,15 +402,34 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
         a_ned = Vector3::zeros();
     }
 
-    // acceleration update
+    // speed update
     next_state[3] += a_ned.x * dt;
     next_state[4] += a_ned.y * dt;
     next_state[5] += a_ned.z * dt;
-
+    let lat_ref = ref_gps[0];
+    let lon_ref=ref_gps[1];
+    let alt_ref=ref_gps[2];
+    let ned_current = gps_to_ned(state[0], state[1], state[2], lat_ref, lon_ref, alt_ref);
+    let n = ned_current[0] + (state[3] + next_state[3]) * 0.5 * dt;
+    let e = ned_current[1] + (state[4] + next_state[4]) * 0.5 * dt;
+    let d = ned_current[2] + (state[5] + next_state[5]) * 0.5 * dt;
+    let (lat, lon, alt) = ned_to_gps([n, e, d], lat_ref, lon_ref, alt_ref);
+    next_state[0] = lat;
+    next_state[1] = lon;
+    next_state[2] = alt;
+    // Position (NED) = pos + (vel_alt + vel_neu)/2 * dt
+    //next_state[0] += (state[3] + next_state[3]) * 0.5 * dt; // North
+    //next_state[1] += (state[4] + next_state[4]) * 0.5 * dt; // East
+    //next_state[2] += (state[5] + next_state[5]) * 0.5 * dt; // Down
+    println!("a_ned: {}", a_ned);
+    println!("v: {} {} {}", next_state[3], next_state[4], next_state[5]);
+    println!("ned_current: {:?}", ned_current);
+    println!("n e d: {} {} {}", n, e, d);
+    println!("lat lon alt: {} {} {}", lat, lon, alt);
     // Attitude update (Quaternion Integration)
-    let gx = (state[9] + state[19]) * dt;
-    let gy = (state[10] + state[20]) * dt;
-    let gz = (state[11] + state[21]) * dt;
+    let gx = (gyro[0] - state[13]) * dt;
+    let gy = (gyro[1] - state[14]) * dt;
+    let gz = (gyro[2] - state[15]) * dt;
 
     let q_alt = Matrix4::new(
         1.0,
@@ -431,27 +450,27 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
         1.0,
     );
 
-    let current_q = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
+    let current_q = SVector::<f64, 4>::new(state[6], state[7], state[8], state[9]);
     //println!("current_q: {:.3}", {current_q});
     let next_q = (q_alt * current_q).normalize();
 
-    next_state[12] = next_q[0];
-    next_state[13] = next_q[1];
-    next_state[14] = next_q[2];
-    next_state[15] = next_q[3];
+    next_state[6] = next_q[0];
+    next_state[7] = next_q[1];
+    next_state[8] = next_q[2];
+    next_state[9] = next_q[3];
 
     next_state
 }
 
-pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f64, 23, 23> {
-    let mut f = SMatrix::<f64, 23, 23>::identity(); // Diagonaleinträge = 1
+pub fn state_transition_jacobian(state: &SVector<f64, 17>, dt: f64, mean_measurement: &[f64; 6]) -> SMatrix<f64, 17, 17> {
+    let mut f = SMatrix::<f64, 17, 17>::identity(); // Diagonaleinträge = 1
 
     // Quaternion of state
-    //let q_vec = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
-    let q_x = state[13];
-    let q_y = state[14];
-    let q_z = state[15];
-    let q_w = state[12];
+    //let q_vec = SVector::<f64, 4>::new(state[6], state[7], state[8], state[9]);
+    let q_x = state[7];
+    let q_y = state[8];
+    let q_z = state[9];
+    let q_w = state[6];
 
     let q_vec = SVector::<f64, 4>::new(q_x, q_y, q_z, q_w);
     let q = UnitQuaternion::from_quaternion(Quaternion::from_vector(q_vec));
@@ -459,39 +478,45 @@ pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f
 
     // Python: F[3:6, 6:9] = R * dt
     // Python: F[3:6, 16:19] = -R * dt
+    let rad_to_deg = 180.0 / std::f64::consts::PI;
+    let r_earth = 6378137.0;
+
+    f[(0, 3)] = dt / r_earth * rad_to_deg;
+    f[(1, 4)] = dt / (r_earth * state[0].to_radians().cos()) * rad_to_deg;
+    f[(2, 5)] = -dt;
     for row in 0..3 {
         for col in 0..3 {
             let val = r[(row, col)] * dt;
-            f[(3 + row, 6 + col)] = val;
-            f[(3 + row, 16 + col)] = -val; //Bias
+            f[(3 + row, 10 + col)] = -val; //Bias
         }
     }
 
     // Gyro + Bias
-    let gx = state[9] + state[19];
-    let gy = state[10] + state[20];
-    let gz = state[11] + state[21];
+    let gx = mean_measurement[3] - state[13];
+    let gy = mean_measurement[4] - state[14];
+    let gz = mean_measurement[5] - state[15];
 
     // Partial differentiation
-    f[(12, 13)] = -0.5 * gx * dt;
-    f[(12, 14)] = -0.5 * gy * dt;
-    f[(12, 15)] = -0.5 * gz * dt;
-    f[(13, 12)] = 0.5 * gx * dt;
-    f[(13, 14)] = 0.5 * gz * dt;
-    f[(13, 15)] = -0.5 * gy * dt;
-    f[(14, 12)] = 0.5 * gy * dt;
-    f[(14, 13)] = -0.5 * gz * dt;
-    f[(14, 15)] = 0.5 * gx * dt;
-    f[(15, 12)] = 0.5 * gz * dt;
-    f[(15, 13)] = 0.5 * gy * dt;
-    f[(15, 14)] = -0.5 * gx * dt;
+    f[(6, 7)] = -0.5 * gx * dt;
+    f[(6, 8)] = -0.5 * gy * dt;
+    f[(6, 9)] = -0.5 * gz * dt;
+    f[(7, 6)] = 0.5 * gx * dt;
+    f[(7, 8)] = 0.5 * gz * dt;
+    f[(7, 9)] = -0.5 * gy * dt;
+    f[(8, 6)] = 0.5 * gy * dt;
+    f[(8, 7)] = -0.5 * gz * dt;
+    f[(8, 9)] = 0.5 * gx * dt;
+    f[(9, 6)] = 0.5 * gz * dt;
+    f[(9, 7)] = 0.5 * gy * dt;
+    f[(9, 8)] = -0.5 * gx * dt;
 
-    let q_vals = [state[12], state[13], state[14], state[15]]; // x, y, z, w
+    let q_vals = [state[6], state[7], state[8], state[9]]; // x, y, z, w
 
     // Zeile 12: [-0.5*q1, -0.5*q2, -0.5*q3]
     // Zeile 13: [ 0.5*q0, -0.5*q3,  0.5*q2]
     // Zeile 14: [ 0.5*q3,  0.5*q0, -0.5*q1]
     // Zeile 15: [-0.5*q2,  0.5*q1,  0.5*q0]
+    /*
     let derivs = [
         [-0.5 * q_vals[1], -0.5 * q_vals[2], -0.5 * q_vals[3]],
         [0.5 * q_vals[0], -0.5 * q_vals[3], 0.5 * q_vals[2]],
@@ -502,58 +527,39 @@ pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f
     for i in 0..4 {
         for j in 0..3 {
             let val = derivs[i][j] * dt;
-            f[(12 + i, 19 + j)] = val; // Bias
-            f[(12 + i, 9 + j)] = val; // Gyro
+            f[(6 + i, 13 + j)] = val; // Bias
         }
-    }
+    }*/
     f
 }
 
 // h(x) simulation, if my predicted state is perfect, which numbers would show my sensors
 pub fn measurement_function(
-    state: &SVector<f64, 23>,
+    state: &SVector<f64, 17>,
     calibration_active: bool,
 ) -> SVector<f64, 10> {
-    // Expected acceleration measurments
-    let ax_expected = state[6] - state[16];
-    let ay_expected = state[7] - state[17];
-    let az_expected = state[8] - state[18];
-
-    // Expected Gyro measurments
-    let (g_roll_expected, g_pitch_expected, g_yaw_expected) = if calibration_active {
-        // during calibration -> only bias/ noise
-        (state[9], state[10], state[11])
-    } else {
-        // during flight -> true rate of rotation - bias
-        (
-            state[9] - state[19],
-            state[10] - state[20],
-            state[11] - state[21],
-        )
-    };
-
     // Expected Baro measurment (hight-baro offset)
     // NEUE umgedrehte vorzeichen
-    let baro_expected = state[2] - state[22];
+    let baro_expected = state[2] - state[16];
 
     // Measurment vector
     SVector::<f64, 10>::from_column_slice(&[
         state[0],         // gps_lat (bzw. North m)
         state[1],         // gps_lon (bzw. East m)
         state[2],         // gps_alt (bzw. Down m)
-        ax_expected,      // low_g_ax
-        ay_expected,      // low_g_ay
-        az_expected,      // low_g_az
-        g_roll_expected,  // low_g_gx
-        g_pitch_expected, // low_g_gy
-        g_yaw_expected,   // low_g_gz
+        state[3],      // low_g_ax
+        state[4],      // low_g_ay
+        state[5],      // low_g_az
+        state[6],  // low_g_gx
+        state[7], // low_g_gy
+        state[8],   // low_g_gz
         baro_expected,    // baro_alt
     ])
 }
 
 // H, if a number change in my state, how infect this my theoretical measurments
-pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
-    let mut h = SMatrix::<f64, 10, 23>::zeros();
+pub fn measurement_jacobian(state: &SVector<f64, 17>) -> SMatrix<f64, 10, 17> {
+    let mut h = SMatrix::<f64, 10, 17>::zeros();
 
     // GPS Position
     h[(0, 0)] = 1.0; // d(gps_n) / d(north)
@@ -562,28 +568,21 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
 
     // Baro
     h[(9, 2)] = 1.0; // d(baro_alt) / d(down_pos)
-    h[(9, 22)] = -1.0; // d(baro_alt) / d(baro_bias)
+    h[(9, 16)] = -1.0; // d(baro_alt) / d(baro_bias)
 
-    // predictet measurment = true acc - bias, because of that second row is negativ
-    h[(3, 6)] = 1.0;
-    h[(4, 7)] = 1.0;
-    h[(5, 8)] = 1.0;
     // Accel-Bias
-    h[(3, 16)] = -1.0;
-    h[(4, 17)] = -1.0;
-    h[(5, 18)] = -1.0;
+    h[(3, 10)] = -1.0;
+    h[(4, 11)] = -1.0;
+    h[(5, 12)] = -1.0;
 
     // Gyro bias
-    h[(6, 19)] = -1.0;
-    h[(7, 20)] = -1.0;
-    h[(8, 21)] = -1.0;
-    h[(6, 9)] = 1.0;
-    h[(7, 10)] = 1.0;
-    h[(8, 11)] = 1.0;
+    h[(6, 13)] = -1.0;
+    h[(7, 14)] = -1.0;
+    h[(8, 15)] = -1.0;
 
     let accel_norm = (state.fixed_rows::<3>(6)).norm();
     if (accel_norm - 9.81).abs() < 1e-2 {
-        let q = [state[12], state[13], state[14], state[15]]; // x, y, z, w
+        let q = [state[6], state[7], state[8], state[9]]; // x, y, z, w
         let d_r_dq = compute_d_rotation_d_quaternion(&q);
         let g_ned = SVector::<f64, 3>::new(0.0, 0.0, 9.8);
 
@@ -592,7 +591,7 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
             let dg_body_dqj = dr_dq_j.transpose() * g_ned;
 
             for i in 0..3 {
-                h[(3 + i, 12 + j)] = -dg_body_dqj[i];
+                h[(3 + i, 6 + j)] = -dg_body_dqj[i];
             }
         }
     }
