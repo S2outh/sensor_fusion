@@ -63,6 +63,7 @@ fn open_csv_64(
             }
         }
     }
+    println!("TIMES LENGTH {} of {}", times.len(), path);
     Ok((times, values))
 }
 
@@ -70,24 +71,23 @@ fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usiz
     if times.is_empty() {
         return 0.0;
     }
-
     while *last_idx < times.len() - 1 && times[*last_idx + 1] < target_t {
         *last_idx += 1;
     }
+    // bfill
+    if target_t <= times[0] {
+        return values[0];
+    }
 
+    // ffill     
     if *last_idx >= times.len() - 1 {
         return values[values.len() - 1];
     }
 
-    let t0 = times[*last_idx];
-    let t1 = times[*last_idx + 1];
-    let v0 = values[*last_idx];
-    let v1 = values[*last_idx + 1];
-
-    v0 + (v1 - v0) * (target_t - t0) / (t1 - t0)
+    values[*last_idx]
 }
 
-pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
+pub fn get_times_old(limit: usize, step: usize) -> Result<Vec<f64>, Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
     let files = vec![
         "FSMS_ACC_Z_1.csv",
@@ -116,9 +116,12 @@ pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
     for file_name in &files {
         let path = format!("{}{}", base_path, file_name);
 
-        if let Ok((times, _)) = open_csv_64(&path, usize::MAX, 10, 1) {
+        if let Ok((times, _)) = open_csv_64(&path, limit, step, 1) {
             //let times = &times[75..];
-            all_timestamps.extend(times);
+            //all_timestamps.extend(times);
+            let rounded_times = times.into_iter().map(|t| (t / 10.0).round() * 10.0);
+            all_timestamps.extend(rounded_times);
+            println!("All timestamps {}", all_timestamps.len());
         }
     }
 
@@ -132,12 +135,33 @@ pub fn get_times() -> Result<Vec<f64>, Box<dyn Error>> {
     Ok(all_timestamps)
 }
 
+pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
+    let base_path = "./src/data_set_1/";
+    
+    let master_file = "FSMS_ACC_Z_1.csv"; 
+    let path = format!("{}{}", base_path, master_file);
+
+    let mut all_timestamps: Vec<f64> = Vec::new();
+
+    if let Ok((times, _)) = open_csv_64(&path, limit, 10, 1) {
+        let rounded_times = times.into_iter().map(|t| (t / 10.0).round() * 10.0);
+        all_timestamps.extend(rounded_times);
+    }
+
+    all_timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    all_timestamps.dedup();
+
+    println!("END OF ALL NUMBERS: {}", all_timestamps.len());
+    Ok(all_timestamps)
+}
+
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
     let limit = usize::MAX;
+    //let limit = 5000;
     let step = 10;
 
-    let master_raw_times = get_times()?;
+    let master_raw_times = get_times(limit)?; //1_426_361 
     //let start_timestamp = 11179.65185;
     //let start_timestamp = 17077.09405;
     
@@ -154,6 +178,7 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let sync_f32_scaled =
         |name: &str, scale: f32, invert: bool| -> Result<Vec<f32>, Box<dyn Error>> {
             let (s_times, s_vals) = open_csv(&format!("{}{}", base_path, name), limit, step, 1)?;
+            let s_times: Vec<f64> = s_times.into_iter().map(|t| (t / 10.0).round() * 10.0).collect();
             let mut last_idx = 0;
             let s_vals_f64: Vec<f64> = s_vals.iter().map(|&v| v as f64).collect();
 
@@ -169,6 +194,7 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
     let sync_f64 = |name: &str| -> Result<Vec<f64>, Box<dyn Error>> {
         let (s_times, s_vals) = open_csv_64(&format!("{}{}", base_path, name), limit, step, 1)?;
+        let s_times: Vec<f64> = s_times.into_iter().map(|t| (t / 10.0).round() * 10.0).collect();
         let mut last_idx = 0;
         Ok(master_raw_times
             .iter()
@@ -249,7 +275,7 @@ pub fn export_flight_data_to_csv(
 
     for i in 0..timestamps.len() {
         wtr.write_record(&[
-            format!("{:.2}", timestamps[i]),
+            format!("{:.6}", timestamps[i]),
             format!("{:.2}", data.accel_x_1[i]),
             format!("{:.2}", data.accel_y_1[i]),
             format!("{:.2}", data.accel_z_1[i]),
@@ -285,12 +311,15 @@ fn confirm() {
 // --------------------------Filter --------------------------
 
 pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
-    let start_idx = data
-        .lat
-        .iter()
-        .position(|&lat| lat.abs() > 0.1)
-        .unwrap_or(0); // Fallback auf 0, falls gar nichts gefunden wird
 
+    let start_idx = (0..data.lat.len())
+        .find(|&i| {
+            data.lat[i].abs() > 0.1 && 
+            data.lon[i].abs() > 0.1 && 
+            data.alt[i] > 100.0 
+        })
+        .expect("Where the hell are we!");
+    
     let lat_ref = data.lat[start_idx];
     println!("lat_ref {}", lat_ref);
     let lon_ref = data.lon[start_idx];
@@ -353,9 +382,9 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[14] = q_i2b[3];
     x[15] = q_i2b[0];
     //Biases, 16, 17, 18, 19, 20, 21 = 0
-    //x[22] = alt_ref - data.pressure[start_idx] as f64;
+    x[22] = alt_ref - data.pressure[start_idx] as f64;
     //let pressure_offset = data.pressure[start_idx];
-    x[22] = 0.0;
+    //x[22] = 0.0 - data.pressure[start_idx] as f64;
 
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
     //println!("ppppppppppppppppppp: {}", p);
@@ -363,11 +392,28 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
     // increasing process noise for baro, reducing measurment noise for gps
+    //q[(22, 22)] = 1.0;
+    //r[(0, 0)] = 0.01;
+    //r[(1, 1)] = 0.01;
+    //r[(2, 2)] = 0.01;
+    //
     let gps_pos_std = 50.0_f64;
     let gps_alt_std = 50.0_f64;
     let baro_alt_std = 200.0_f64;
     let accel_std = 1.5_f64;
     let gyro_std = 0.1_f64;
+    let deg_per_meter = 1.0 / 111132.0;
+    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    r[(2, 2)] = gps_alt_std.powi(2);                   // alt
+    r[(3, 3)] = accel_std.powi(2);
+    r[(4, 4)] = accel_std.powi(2);
+    r[(5, 5)] = accel_std.powi(2);
+    r[(6, 6)] = gyro_std.powi(2);
+    r[(7, 7)] = gyro_std.powi(2);
+    r[(8, 8)] = gyro_std.powi(2);
+    r[(9, 9)] = baro_alt_std.powi(2);
+    q[(22, 22)] = 1.0;
 
     let deg_per_meter = 1.0 / 111132.0;
 
@@ -420,12 +466,12 @@ impl RocketEKF {
                 "AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
             HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHhh, zeit"
             );
-            confirm();
+            //confirm();
         };
         let f = state_transition_jacobian(&self.state, dt);
-        if f.iter().any(|&x| x.is_nan()) {
+        //if f.iter().any(|&x| x.is_nan()) {
             // println!("f after state_transition jacobian {}", f);
-        }
+        //}
         self.state = state_transition(&self.state, dt);
         self.p = f * self.p * f.transpose() + self.q;
 
@@ -470,9 +516,9 @@ impl RocketEKF {
 
         // Kalman Gain
         let mut s = &h * &self.p * h.transpose() + &r;
-        if s.iter().any(|&x| x.is_nan()) {
-            println!("s kalman gain {}", s);
-        }
+        //if s.iter().any(|&x| x.is_nan()) {
+            //println!("s kalman gain {}", s);
+        //}
         //println!("kalman h {}", h);
         //println!("kalman p {}", self.p);
         //println!("kalman h.transpose {}", h.transpose());
@@ -485,6 +531,8 @@ impl RocketEKF {
             .try_inverse()
             .expect("S matrix inversion failed");
         let mut k = &self.p * h.transpose() * s_inv;
+
+        println!("k {}", k);
 
         // quat slow with little gain
         for i in 0..4 {
@@ -546,7 +594,8 @@ impl RocketEKF {
         let i_kh = i - (&k * h);
         self.p = &i_kh * &self.p * i_kh.transpose() + &k * r * k.transpose();
         if self.p.iter().any(|&x| x.is_nan()) {
-            println!("p joseph form {}", self.p);
+            //println!("p joseph form {}", self.p);
+            println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
         }
 
         // quaternion normalize
