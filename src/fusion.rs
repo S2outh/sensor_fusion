@@ -157,8 +157,8 @@ pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
 
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
-    let limit = usize::MAX;
-    //let limit = 5000;
+    //let limit = usize::MAX;
+    let limit = 50000;
     let step = 10;
 
     let master_raw_times = get_times(limit)?; //1_426_361 
@@ -347,7 +347,7 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         //data.yaw_1[i] = data.yaw_1[i].to_radians();
     }
 
-    let g_ned = Vector3::new(0.0, 0.0, 9.8);
+    let g_ned = Vector3::new(0.0, 0.0, 9.8); //9.8
     // Initialization of orientation
     let g_body = Vector3::new(
         data.accel_x_1[start_idx] as f64,
@@ -357,10 +357,13 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let g_ned_norm = g_ned.normalize();
     let g_body_norm = g_body.normalize();
 
-    // Quaternion (lRotationn from NED to body)
+    //let g_ned_norm = Vector3::new(0.0, 0.0, -1.0);
+    //let g_body_norm = Vector3::new(1.0, 0.0, 0.0);
+
+    // Quaternion (lRotationn from NED to body), x, y, z, w
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
 
-    println!("whup whup quat {}", q_i2b);
+    //println!("whup whup quat {}", q_i2b);
 
     // Kalman matrix initialization
     type StateVector = SVector<f64, 23>;
@@ -376,11 +379,11 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[7] = data.accel_y_1[start_idx] as f64;
     x[8] = data.accel_z_1[start_idx] as f64;
     // 9, 10, 11 = 0 -> Gyroscop
-    // Quaternions x, y, z, w
-    x[12] = q_i2b[1];
-    x[13] = q_i2b[2];
-    x[14] = q_i2b[3];
-    x[15] = q_i2b[0];
+    // Quaternions
+    x[12] = q_i2b.w;
+    x[13] = q_i2b.i;
+    x[14] = q_i2b.j;
+    x[15] = q_i2b.k;
     //Biases, 16, 17, 18, 19, 20, 21 = 0
     x[22] = alt_ref - data.pressure[start_idx] as f64;
     //let pressure_offset = data.pressure[start_idx];
@@ -413,8 +416,8 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     r[(7, 7)] = gyro_std.powi(2);
     r[(8, 8)] = gyro_std.powi(2);
     r[(9, 9)] = baro_alt_std.powi(2);
-    q[(22, 22)] = 1.0;
-
+    //q[(22, 22)] = 1.0;
+    q[(22, 22)] = 0.0001;
     let deg_per_meter = 1.0 / 111132.0;
 
     // GPS position (lat, lon in degrees, alt in meters)
@@ -461,6 +464,9 @@ impl RocketEKF {
         }
     }
     pub fn predict(&mut self, dt: f64) {
+
+        // Meine
+        self.p = (&self.p + self.p.transpose()) * 0.5;
         if dt > 1.0 {
             println!(
                 "AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
@@ -516,9 +522,10 @@ impl RocketEKF {
 
         // Kalman Gain
         let mut s = &h * &self.p * h.transpose() + &r;
-        //if s.iter().any(|&x| x.is_nan()) {
-            //println!("s kalman gain {}", s);
-        //}
+        if s.iter().any(|&x| x.is_nan()) {
+            println!("s kalman gain {}", s);
+            confirm();
+        }
         //println!("kalman h {}", h);
         //println!("kalman p {}", self.p);
         //println!("kalman h.transpose {}", h.transpose());
@@ -532,7 +539,7 @@ impl RocketEKF {
             .expect("S matrix inversion failed");
         let mut k = &self.p * h.transpose() * s_inv;
 
-        println!("k {}", k);
+        //println!("k {}", k);
 
         // quat slow with little gain
         for i in 0..4 {
@@ -554,8 +561,9 @@ impl RocketEKF {
             let h_idx_in_innovation = idx.iter().position(|&x| x == 2).unwrap();
             let h_innovation = innovation[h_idx_in_innovation];
 
-            if h_innovation.abs() > 1000.0 {
+            //if h_innovation.abs() > 1000.0 {
 
+            if h_innovation.abs() > 1000.0 {
                 self.state[0] = z_measured[0];
                 self.state[1] = z_measured[1];
                 self.state[2] = z_measured[2];
@@ -596,9 +604,11 @@ impl RocketEKF {
         if self.p.iter().any(|&x| x.is_nan()) {
             //println!("p joseph form {}", self.p);
             println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
+            confirm();
         }
 
         // quaternion normalize
+        // w, x, y, z
         let q_raw = [
             self.state[12],
             self.state[13],
@@ -739,7 +749,7 @@ impl FlightManager {
             for j in 0..6 {
                 z_measured[3 + j] = mean_measurement[j];
             }
-            z_measured[9] = data.pressure[i] as f64;
+            z_measured[9] = - data.pressure[i] as f64;
 
             let mut mask = [false; 10];
             if let Some(prev) = z_prev {
