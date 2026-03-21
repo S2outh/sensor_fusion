@@ -68,6 +68,7 @@ fn open_csv_64(
 }
 
 fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usize) -> f64 {
+    
     if times.is_empty() {
         return 0.0;
     }
@@ -157,8 +158,8 @@ pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
 
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
-    //let limit = usize::MAX;
-    let limit = 50000;
+    let limit = usize::MAX;
+    //let limit = 50000;
     let step = 10;
 
     let master_raw_times = get_times(limit)?; //1_426_361 
@@ -203,7 +204,16 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     };
 
     let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
+    let pres_pure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
+        
+    let file = File::create("./height.csv")?;
+    let mut wtr = Writer::from_writer(file);
+    wtr.write_record(&["pres_pure", "pres_alt", "height"])?;
+    
+
+
     let mut prev_valid_pressure: f32 = 100_000.0;
+    /*
     for v in pressure.iter_mut() {
         let p = if *v > 0.0 {
             prev_valid_pressure = *v;
@@ -212,6 +222,14 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
             prev_valid_pressure
         };
         *v = pres_to_alt(p);
+    }
+    */
+    for v in pressure.iter_mut() {
+        if *v  > 0.0 {
+            prev_valid_pressure = *v;
+            
+        } 
+          *v =   prev_valid_pressure
     }
 
     let data = FlightData {
@@ -240,8 +258,23 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         z: sync_f64("FSMS_ECEF_Z.csv")?,
 
         //pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
-        pressure: pressure,
+        pressure: pressure.clone(),
+
+
     };
+
+
+    for i in 0..timestamps.len(){
+        wtr.write_record(&[
+            format!("{:.4}", pres_pure[i]),
+            format!("{:.4}", pressure[i]), 
+            format!("{:.4}", data.alt[i]),
+        ])?;
+    }
+
+    wtr.flush()?;
+    
+
     let pathi = "./vsinput.csv";
     export_flight_data_to_csv(&data, &timestamps, &pathi)?;
     println!("Data synced and loaded into FlightData.");
@@ -327,7 +360,7 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let alt_ref = data.alt[start_idx];
     println!("alt_ref {}", alt_ref);
     println!("start_idk {}", start_idx);
-    confirm();
+    //confirm();
 
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
     let rotation_matrix = ecef_to_ned_matrix(lat_ref, lon_ref);
@@ -484,7 +517,7 @@ impl RocketEKF {
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         let q_norm = normalize_quaternion(q_raw);
-
+        println!("Ich bin ein cutes quat, in predict {:?}", q_norm);
         self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
     }
 
@@ -524,7 +557,7 @@ impl RocketEKF {
         let mut s = &h * &self.p * h.transpose() + &r;
         if s.iter().any(|&x| x.is_nan()) {
             println!("s kalman gain {}", s);
-            confirm();
+            //confirm();
         }
         //println!("kalman h {}", h);
         //println!("kalman p {}", self.p);
@@ -604,7 +637,7 @@ impl RocketEKF {
         if self.p.iter().any(|&x| x.is_nan()) {
             //println!("p joseph form {}", self.p);
             println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
-            confirm();
+       //     confirm();
         }
 
         // quaternion normalize

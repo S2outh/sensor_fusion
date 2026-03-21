@@ -385,7 +385,6 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
         state[12], state[13], state[14], state[15], 
     ));
 
-    println!("qqqqqqqqqqqqqqqq {}", q);
     let r_body_to_ned = q.to_rotation_matrix();
 
     // Gravitation matrix on body
@@ -442,6 +441,8 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
     next_state[13] = next_q.x;
     next_state[14] = next_q.y;
     next_state[15] = next_q.z;
+    //println!("W: {:.3}, X: {:.3}, Y: {:.3}, Z: {:.3}", 
+    //next_state[12], next_state[13], next_state[14], next_state[15]);
 
     next_state
 }
