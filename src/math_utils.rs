@@ -369,7 +369,7 @@ pub fn normalize_quaternion(quaternion: [f64; 4]) -> [f64; 4] {
     ]
 }
 
-pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
+pub fn state_transition_old(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
     println!("ich bin state_transition - new iteration");
     let mut next_state = *state;
 
@@ -380,9 +380,9 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
 
     // Rotation matrix
     let q = UnitQuaternion::from_quaternion(Quaternion::new(
-            //Arguments w x y z
-            //Storage x y z w
-        state[12], state[13], state[14], state[15], 
+        //Arguments w x y z
+        //Storage x y z w
+        state[12], state[13], state[14], state[15],
     ));
 
     let r_body_to_ned = q.to_rotation_matrix();
@@ -396,7 +396,7 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
         state[6] + state[16],
         state[7] + state[17],
         state[8] + state[18],
-    ) - g_body;
+    ) + g_body;
     let mut a_ned = r_body_to_ned * a_body;
 
     // Deadzone
@@ -404,7 +404,7 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
         a_ned = Vector3::zeros();
     }
 
-    // acceleration update
+    // acceleration update beschleunigung
     next_state[3] += a_ned.x * dt;
     next_state[4] += a_ned.y * dt;
     next_state[5] += a_ned.z * dt;
@@ -441,7 +441,77 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
     next_state[13] = next_q.x;
     next_state[14] = next_q.y;
     next_state[15] = next_q.z;
-    //println!("W: {:.3}, X: {:.3}, Y: {:.3}, Z: {:.3}", 
+    //println!("W: {:.3}, X: {:.3}, Y: {:.3}, Z: {:.3}",
+    //next_state[12], next_state[13], next_state[14], next_state[15]);
+
+    next_state
+}
+
+pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
+    let mut next_state = *state;
+
+    next_state[0] += state[3] * dt;
+    next_state[1] += state[4] * dt;
+    next_state[2] += state[5] * dt;
+
+    let q = UnitQuaternion::from_quaternion(Quaternion::new(
+        state[12], state[13], state[14], state[15],
+    ));
+    let r_body_to_ned = q.to_rotation_matrix();
+
+    let a_sensor_body = Vector3::new(
+        state[6] + state[16],
+        state[7] + state[17],
+        state[8] + state[18],
+    );
+
+    let a_measured_ned = r_body_to_ned * a_sensor_body;
+
+    let g_ned = Vector3::new(0.0, 0.0, 9.8);
+    let mut a_ned = a_measured_ned + g_ned;
+
+    // Deadzone
+    if a_ned.norm() < 0.05 {
+        a_ned = Vector3::zeros();
+    }
+
+    next_state[3] += a_ned.x * dt;
+    next_state[4] += a_ned.y * dt;
+    next_state[5] += a_ned.z * dt;
+
+    // Attitude update (Quaternion Integration)
+    let gx = (state[9] + state[19]) * dt;
+    let gy = (state[10] + state[20]) * dt;
+    let gz = (state[11] + state[21]) * dt;
+
+    let q_alt = Matrix4::new(
+        1.0,
+        -gx / 2.0,
+        -gy / 2.0,
+        -gz / 2.0,
+        gx / 2.0,
+        1.0,
+        gz / 2.0,
+        -gy / 2.0,
+        gy / 2.0,
+        -gz / 2.0,
+        1.0,
+        gx / 2.0,
+        gz / 2.0,
+        gy / 2.0,
+        -gx / 2.0,
+        1.0,
+    );
+    // x, y, z, w
+    let current_q = SVector::<f64, 4>::new(state[13], state[14], state[15], state[12]);
+    //println!("current_q: {:.3}", {current_q});
+    let next_q = (q_alt * current_q).normalize();
+
+    next_state[12] = next_q.w;
+    next_state[13] = next_q.x;
+    next_state[14] = next_q.y;
+    next_state[15] = next_q.z;
+    //println!("W: {:.3}, X: {:.3}, Y: {:.3}, Z: {:.3}",
     //next_state[12], next_state[13], next_state[14], next_state[15]);
 
     next_state
@@ -493,23 +563,23 @@ pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f
 
     //let q_vals = [state[12], state[13], state[14], state[15]]; // x, y, z, w
     //let q_vals = [state[13], state[14], state[15], state[12]]; // x, y, z, w
-    
+
     // Zeile 12: [-0.5*q1, -0.5*q2, -0.5*q3]
     // Zeile 13: [ 0.5*q0, -0.5*q3,  0.5*q2]
     // Zeile 14: [ 0.5*q3,  0.5*q0, -0.5*q1]
     // Zeile 15: [-0.5*q2,  0.5*q1,  0.5*q0]
     //let derivs = [
-        //[-0.5 * q_vals[1], -0.5 * q_vals[2], -0.5 * q_vals[3]],
-        //[0.5 * q_vals[0], -0.5 * q_vals[3], 0.5 * q_vals[2]],
-        //[0.5 * q_vals[3], 0.5 * q_vals[0], -0.5 * q_vals[1]],
-        //[-0.5 * q_vals[2], 0.5 * q_vals[1], 0.5 * q_vals[0]],
+    //[-0.5 * q_vals[1], -0.5 * q_vals[2], -0.5 * q_vals[3]],
+    //[0.5 * q_vals[0], -0.5 * q_vals[3], 0.5 * q_vals[2]],
+    //[0.5 * q_vals[3], 0.5 * q_vals[0], -0.5 * q_vals[1]],
+    //[-0.5 * q_vals[2], 0.5 * q_vals[1], 0.5 * q_vals[0]],
     //];
 
     let derivs = [
         [-0.5 * q_x, -0.5 * q_y, -0.5 * q_z], // d_qw / d_omega
-        [ 0.5 * q_w, -0.5 * q_z,  0.5 * q_y], // d_qx / d_omega
-        [ 0.5 * q_z,  0.5 * q_w, -0.5 * q_x], // d_qy / d_omega
-        [-0.5 * q_y,  0.5 * q_x,  0.5 * q_w], // d_qz / d_omega
+        [0.5 * q_w, -0.5 * q_z, 0.5 * q_y],   // d_qx / d_omega
+        [0.5 * q_z, 0.5 * q_w, -0.5 * q_x],   // d_qy / d_omega
+        [-0.5 * q_y, 0.5 * q_x, 0.5 * q_w],   // d_qz / d_omega
     ];
 
     for i in 0..4 {
@@ -547,7 +617,7 @@ pub fn measurement_function(
 
     // Expected Baro measurment (hight-baro offset)
     // NEUE umgedrehte vorzeichen
-    let baro_expected = - state[2] - state[22];
+    let baro_expected = -state[2] - state[22];
 
     // Measurment vector
     SVector::<f64, 10>::from_column_slice(&[

@@ -68,7 +68,6 @@ fn open_csv_64(
 }
 
 fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usize) -> f64 {
-    
     if times.is_empty() {
         return 0.0;
     }
@@ -80,7 +79,7 @@ fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usiz
         return values[0];
     }
 
-    // ffill     
+    // ffill
     if *last_idx >= times.len() - 1 {
         return values[values.len() - 1];
     }
@@ -138,8 +137,8 @@ pub fn get_times_old(limit: usize, step: usize) -> Result<Vec<f64>, Box<dyn Erro
 
 pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
-    
-    let master_file = "FSMS_ACC_Z_1.csv"; 
+
+    let master_file = "FSMS_ACC_Z_1.csv";
     let path = format!("{}{}", base_path, master_file);
 
     let mut all_timestamps: Vec<f64> = Vec::new();
@@ -165,8 +164,8 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let master_raw_times = get_times(limit)?; //1_426_361 
     //let start_timestamp = 11179.65185;
     //let start_timestamp = 17077.09405;
-    
-    let start_timestamp = 486612436.0/100000.0;
+
+    let start_timestamp = 486612436.0 / 100000.0;
     //let skip_count = 7512;
     let skip_count = 1;
     let master_raw_times = &master_raw_times[skip_count..];
@@ -179,7 +178,10 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let sync_f32_scaled =
         |name: &str, scale: f32, invert: bool| -> Result<Vec<f32>, Box<dyn Error>> {
             let (s_times, s_vals) = open_csv(&format!("{}{}", base_path, name), limit, step, 1)?;
-            let s_times: Vec<f64> = s_times.into_iter().map(|t| (t / 10.0).round() * 10.0).collect();
+            let s_times: Vec<f64> = s_times
+                .into_iter()
+                .map(|t| (t / 10.0).round() * 10.0)
+                .collect();
             let mut last_idx = 0;
             let s_vals_f64: Vec<f64> = s_vals.iter().map(|&v| v as f64).collect();
 
@@ -195,7 +197,10 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
     let sync_f64 = |name: &str| -> Result<Vec<f64>, Box<dyn Error>> {
         let (s_times, s_vals) = open_csv_64(&format!("{}{}", base_path, name), limit, step, 1)?;
-        let s_times: Vec<f64> = s_times.into_iter().map(|t| (t / 10.0).round() * 10.0).collect();
+        let s_times: Vec<f64> = s_times
+            .into_iter()
+            .map(|t| (t / 10.0).round() * 10.0)
+            .collect();
         let mut last_idx = 0;
         Ok(master_raw_times
             .iter()
@@ -205,12 +210,10 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
     let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
     let pres_pure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
-        
+
     let file = File::create("./height.csv")?;
     let mut wtr = Writer::from_writer(file);
     wtr.write_record(&["pres_pure", "pres_alt", "height"])?;
-    
-
 
     let mut prev_valid_pressure: f32 = 100_000.0;
     /*
@@ -225,11 +228,14 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     }
     */
     for v in pressure.iter_mut() {
-        if *v  > 0.0 {
+        if *v > 0.0 {
             prev_valid_pressure = *v;
-            
-        } 
-          *v =   prev_valid_pressure
+        }
+        *v = prev_valid_pressure
+    }
+
+    for v in pressure.iter_mut() {
+        *v = pres_to_alt(*v);
     }
 
     let data = FlightData {
@@ -259,21 +265,17 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
         //pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
         pressure: pressure.clone(),
-
-
     };
 
-
-    for i in 0..timestamps.len(){
+    for i in 0..timestamps.len() {
         wtr.write_record(&[
             format!("{:.4}", pres_pure[i]),
-            format!("{:.4}", pressure[i]), 
+            format!("{:.4}", pressure[i]),
             format!("{:.4}", data.alt[i]),
         ])?;
     }
 
     wtr.flush()?;
-    
 
     let pathi = "./vsinput.csv";
     export_flight_data_to_csv(&data, &timestamps, &pathi)?;
@@ -344,15 +346,10 @@ fn confirm() {
 // --------------------------Filter --------------------------
 
 pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
-
     let start_idx = (0..data.lat.len())
-        .find(|&i| {
-            data.lat[i].abs() > 0.1 && 
-            data.lon[i].abs() > 0.1 && 
-            data.alt[i] > 100.0 
-        })
+        .find(|&i| data.lat[i].abs() > 0.1 && data.lon[i].abs() > 0.1 && data.alt[i] > 100.0)
         .expect("Where the hell are we!");
-    
+
     let lat_ref = data.lat[start_idx];
     println!("lat_ref {}", lat_ref);
     let lon_ref = data.lon[start_idx];
@@ -428,55 +425,35 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
     // increasing process noise for baro, reducing measurment noise for gps
-    //q[(22, 22)] = 1.0;
-    //r[(0, 0)] = 0.01;
-    //r[(1, 1)] = 0.01;
-    //r[(2, 2)] = 0.01;
-    //
-    let gps_pos_std = 50.0_f64;
-    let gps_alt_std = 50.0_f64;
-    let baro_alt_std = 200.0_f64;
-    let accel_std = 1.5_f64;
-    let gyro_std = 0.1_f64;
-    let deg_per_meter = 1.0 / 111132.0;
-    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
-    r[(2, 2)] = gps_alt_std.powi(2);                   // alt
-    r[(3, 3)] = accel_std.powi(2);
-    r[(4, 4)] = accel_std.powi(2);
-    r[(5, 5)] = accel_std.powi(2);
-    r[(6, 6)] = gyro_std.powi(2);
-    r[(7, 7)] = gyro_std.powi(2);
-    r[(8, 8)] = gyro_std.powi(2);
-    r[(9, 9)] = baro_alt_std.powi(2);
-    //q[(22, 22)] = 1.0;
-    q[(22, 22)] = 0.0001;
-    let deg_per_meter = 1.0 / 111132.0;
-
-    // GPS position (lat, lon in degrees, alt in meters)
-    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
-    r[(2, 2)] = gps_alt_std.powi(2);                   // alt
-
-    // Accelerometer (indices 3–5)
-    r[(3, 3)] = accel_std.powi(2);
-    r[(4, 4)] = accel_std.powi(2);
-    r[(5, 5)] = accel_std.powi(2);
-
-    // Gyroscope (indices 6–8)
-    r[(6, 6)] = gyro_std.powi(2);
-    r[(7, 7)] = gyro_std.powi(2);
-    r[(8, 8)] = gyro_std.powi(2);
-
-    // Barometer alt (index 9)
-    r[(9, 9)] = baro_alt_std.powi(2);
-
-    // Process noise for baro state
     q[(22, 22)] = 1.0;
-    // println!("p {}", p);
-    //  println!("q {}", q);
-    //  println!("x {}", x);
-    //  println!("r {}", r);
+    r[(0, 0)] = 0.01;
+    r[(1, 1)] = 0.01;
+    r[(2, 2)] = 0.01;
+    //
+    //let gps_pos_std = 50.0_f64;
+    //let gps_alt_std = 50.0_f64;
+    //let baro_alt_std = 200.0_f64;
+    //let accel_std = 1.5_f64;
+    //let gyro_std = 0.1_f64;
+    //let deg_per_meter = 1.0 / 111132.0;
+    //r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    //r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    //r[(2, 2)] = gps_alt_std.powi(2); // alt
+    //r[(3, 3)] = accel_std.powi(2);
+    //r[(4, 4)] = accel_std.powi(2);
+    //r[(5, 5)] = accel_std.powi(2);
+    //r[(6, 6)] = gyro_std.powi(2);
+    //r[(7, 7)] = gyro_std.powi(2);
+    //r[(8, 8)] = gyro_std.powi(2);
+    //r[(9, 9)] = baro_alt_std.powi(2);
+    //q[(22, 22)] = 1.0;
+
+
+
+    //println!("p {}", p);
+    //println!("q {}", q);
+    //println!("x {}", x);
+    //println!("r {}", r);
 
     RocketEKF::new(x, p, q, r)
 }
@@ -496,8 +473,42 @@ impl RocketEKF {
             baro_needs_sync: false,
         }
     }
-    pub fn predict(&mut self, dt: f64) {
+    pub fn print_state(&self) {
+        println!("--- EKF State (23 Elements) ---");
+        // Position (0-2)
+        println!(
+            "Pos (x,y,z):    {:>10.4} {:>10.4} {:>10.4}",
+            self.state[0], self.state[1], self.state[2]
+        );
+        // Velocity (3-5)
+        println!(
+            "Vel (vx,vy,vz): {:>10.4} {:>10.4} {:>10.4}",
+            self.state[3], self.state[4], self.state[5]
+        );
+        // Acc (6-8)
+        println!(
+            "Acc : {:>10.4} {:>10.4} {:>10.4} ",
+            self.state[6], self.state[7], self.state[8]
+        );
+        // Gyroscop
+        println!(
+            "Gyro: {:>10.4} {:>10.4} {:>10.4}",
+            self.state[9], self.state[10], self.state[11]
+        );
+        // Quat Biases (13-15)
+        println!(
+            "Quat (w, x, y, z): {:>10.4} {:>10.4} {:>10.4} {:>10.4}",
+            self.state[12], self.state[13], self.state[14], self.state[15]
+        );
 
+        // Restliche 7 Elemente (falls du noch Beschleunigung/andere Biases drin hast)
+        print!("Rest:           ");
+        for i in 16..23 {
+            print!("{:>10.4} ", self.state[i]);
+        }
+        println!("\n-------------------------------");
+    }
+    pub fn predict(&mut self, dt: f64) {
         // Meine
         self.p = (&self.p + self.p.transpose()) * 0.5;
         if dt > 1.0 {
@@ -508,16 +519,19 @@ impl RocketEKF {
             //confirm();
         };
         let f = state_transition_jacobian(&self.state, dt);
-        //if f.iter().any(|&x| x.is_nan()) {
-            // println!("f after state_transition jacobian {}", f);
-        //}
+        self.print_state();
+        if f.iter().any(|&x| x.is_nan()) {
+            //println!("f after state_transition jacobian {}", f);
+            self.print_state();
+            //confirm();
+        }
         self.state = state_transition(&self.state, dt);
         self.p = f * self.p * f.transpose() + self.q;
 
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         let q_norm = normalize_quaternion(q_raw);
-        println!("Ich bin ein cutes quat, in predict {:?}", q_norm);
+        //println!("Ich bin ein cutes quat, in predict {:?}", q_norm);
         self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
     }
 
@@ -559,10 +573,10 @@ impl RocketEKF {
             println!("s kalman gain {}", s);
             //confirm();
         }
-        //println!("kalman h {}", h);
-        //println!("kalman p {}", self.p);
-        //println!("kalman h.transpose {}", h.transpose());
-        //println!("kalman r {}", r);
+        // println!("kalman h {}", h);
+        // println!("kalman p {}", self.p);
+        // println!("kalman h.transpose {}", h.transpose());
+        // println!("kalman r {}", r);
         s = (&s + s.transpose()) / 2.0;
 
         let s_inv = s
@@ -637,7 +651,7 @@ impl RocketEKF {
         if self.p.iter().any(|&x| x.is_nan()) {
             //println!("p joseph form {}", self.p);
             println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
-       //     confirm();
+            confirm();
         }
 
         // quaternion normalize
@@ -776,13 +790,13 @@ impl FlightManager {
             z_measured[2] = data.alt[i];
             //NEUE
 
-            //z_measured[0] = data.x[i];
-            //z_measured[1] = data.y[i];
-            //z_measured[2] = data.z[i];
+          //  z_measured[0] = data.x[i];
+          //  z_measured[1] = data.y[i];
+          //  z_measured[2] = data.z[i];
             for j in 0..6 {
                 z_measured[3 + j] = mean_measurement[j];
             }
-            z_measured[9] = - data.pressure[i] as f64;
+            z_measured[9] = -data.pressure[i] as f64;
 
             let mut mask = [false; 10];
             if let Some(prev) = z_prev {
