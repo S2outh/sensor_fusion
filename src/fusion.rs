@@ -216,12 +216,12 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     wtr.write_record(&["pres_pure", "pres_alt", "height"])?;
     let mut last = 100_000.0_f32;
 
-for v in &mut pressure {
-    if *v > 0.0 {
-        last = *v;
+    for v in &mut pressure {
+        if *v > 0.0 {
+            last = *v;
+        }
+        *v = pres_to_alt(last);
     }
-    *v = pres_to_alt(last);
-}
 
     let data = FlightData {
         accel_x_1: sync_f32_scaled("FSMS_ACC_Z_1.csv", 100.0, false)?,
@@ -369,7 +369,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let g_ned_norm = g_ned.normalize();
     let g_body_norm = g_body.normalize();
 
-
     // Quaternion (lRotationn from NED to body), x, y, z, w
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
 
@@ -397,20 +396,20 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     //Biases, 16, 17, 18, 19, 20, 21 = 0
     //x[22] = alt_ref - data.pressure[start_idx] as f64;
     //let pressure_offset = data.pressure[start_idx];
-    x[22] = -alt_ref + data.pressure[start_idx] as f64;
-
+    //x[22] = -alt_ref + data.pressure[start_idx] as f64;
+    x[22] = 0.0;
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
     //println!("ppppppppppppppppppp: {}", p);
     let mut q = SMatrix::<f64, 23, 23>::identity() * 0.01; // process noise
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
     // increasing process noise for baro, reducing measurment noise for gps
-    q[(22, 22)] = 1.0;
+    q[(22, 22)] = 1e-3;
     r[(0, 0)] = 0.01;
     r[(1, 1)] = 0.01;
     r[(2, 2)] = 0.01;
+    r[(9, 9)] = 10_000.0;
 
-    
     //
     //let gps_pos_std = 50.0_f64;
     //let gps_alt_std = 50.0_f64;
@@ -765,18 +764,18 @@ impl FlightManager {
             }
 
             let mut z_measured = SVector::<f64, 10>::zeros();
-           // z_measured[0] = data.lat[i];
-           // z_measured[1] = data.lon[i];
-           // z_measured[2] = data.alt[i];
+            // z_measured[0] = data.lat[i];
+            // z_measured[1] = data.lon[i];
+            // z_measured[2] = data.alt[i];
             //NEUE
 
-              z_measured[0] = data.x[i];
-              z_measured[1] = data.y[i];
-              z_measured[2] = data.z[i];
+            z_measured[0] = data.x[i];
+            z_measured[1] = data.y[i];
+            z_measured[2] = data.z[i];
             for j in 0..6 {
                 z_measured[3 + j] = mean_measurement[j];
             }
-            z_measured[9] = -data.pressure[i] as f64;
+            z_measured[9] = data.pressure[i] as f64 - data.pressure[start_idx] as f64;
 
             let mut mask = [false; 10];
             if let Some(prev) = z_prev {
@@ -788,7 +787,16 @@ impl FlightManager {
             } else {
                 mask = [true; 10];
             }
+            if mask[9] {
+                let baro_vs_gps = (z_measured[9] - z_measured[2]).abs();
+                if baro_vs_gps > 100.0 {
+                    mask[9] = false;
+                }
+            }
+
             ekf.update(&z_measured, &mask);
+            println!("After update:");
+            ekf.print_state();
             estimated_states.push(ekf.state.clone());
             z_prev = Some(z_measured);
             prev_time = current_time;

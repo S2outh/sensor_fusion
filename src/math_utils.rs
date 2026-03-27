@@ -519,6 +519,9 @@ pub fn state_transition(state: &SVector<f64, 23>, dt: f64) -> SVector<f64, 23> {
 
 pub fn state_transition_jacobian(state: &SVector<f64, 23>, dt: f64) -> SMatrix<f64, 23, 23> {
     let mut f = SMatrix::<f64, 23, 23>::identity(); // Diagonaleinträge = 1
+    f[(0, 3)] = dt;
+    f[(1, 4)] = dt;
+    f[(2, 5)] = dt;
 
     // Quaternion of state
     //let q_vec = SVector::<f64, 4>::new(state[12], state[13], state[14], state[15]);
@@ -598,9 +601,9 @@ pub fn measurement_function(
     calibration_active: bool,
 ) -> SVector<f64, 10> {
     // Expected acceleration measurments
-    let ax_expected = state[6] - state[16];
-    let ay_expected = state[7] - state[17];
-    let az_expected = state[8] - state[18];
+    let ax_expected = state[6] + state[16];
+    let ay_expected = state[7] + state[17];
+    let az_expected = state[8] + state[18];
 
     // Expected Gyro measurments
     let (g_roll_expected, g_pitch_expected, g_yaw_expected) = if calibration_active {
@@ -609,9 +612,9 @@ pub fn measurement_function(
     } else {
         // during flight -> true rate of rotation - bias
         (
-            state[9] - state[19],
-            state[10] - state[20],
-            state[11] - state[21],
+            state[9] + state[19],
+            state[10] + state[20],
+            state[11] + state[21],
         )
     };
 
@@ -644,22 +647,22 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
     h[(2, 2)] = 1.0; // d(gps_d) / d(down)
 
     // Baro
-    h[(9, 2)] = 1.0; // d(baro_alt) / d(down_pos)
-    h[(9, 22)] = -1.0; // d(baro_alt) / d(baro_bias)
+    h[(9, 2)] = -1.0; // d(baro_alt) / d(down_pos)
+    h[(9, 22)] = 1.0; // d(baro_alt) / d(baro_bias)
 
     // predictet measurment = true acc - bias, because of that second row is negativ
     h[(3, 6)] = 1.0;
     h[(4, 7)] = 1.0;
     h[(5, 8)] = 1.0;
     // Accel-Bias
-    h[(3, 16)] = -1.0;
-    h[(4, 17)] = -1.0;
-    h[(5, 18)] = -1.0;
+    h[(3, 16)] = 1.0;
+    h[(4, 17)] = 1.0;
+    h[(5, 18)] = 1.0;
 
     // Gyro bias
-    h[(6, 19)] = -1.0;
-    h[(7, 20)] = -1.0;
-    h[(8, 21)] = -1.0;
+    h[(6, 19)] = 1.0;
+    h[(7, 20)] = 1.0;
+    h[(8, 21)] = 1.0;
     h[(6, 9)] = 1.0;
     h[(7, 10)] = 1.0;
     h[(8, 11)] = 1.0;
