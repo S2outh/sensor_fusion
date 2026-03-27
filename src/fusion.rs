@@ -214,29 +214,14 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let file = File::create("./height.csv")?;
     let mut wtr = Writer::from_writer(file);
     wtr.write_record(&["pres_pure", "pres_alt", "height"])?;
+    let mut last = 100_000.0_f32;
 
-    let mut prev_valid_pressure: f32 = 100_000.0;
-    /*
-    for v in pressure.iter_mut() {
-        let p = if *v > 0.0 {
-            prev_valid_pressure = *v;
-            *v
-        } else {
-            prev_valid_pressure
-        };
-        *v = pres_to_alt(p);
+for v in &mut pressure {
+    if *v > 0.0 {
+        last = *v;
     }
-    */
-    for v in pressure.iter_mut() {
-        if *v > 0.0 {
-            prev_valid_pressure = *v;
-        }
-        *v = prev_valid_pressure
-    }
-
-    for v in pressure.iter_mut() {
-        *v = pres_to_alt(*v);
-    }
+    *v = pres_to_alt(last);
+}
 
     let data = FlightData {
         accel_x_1: sync_f32_scaled("FSMS_ACC_Z_1.csv", 100.0, false)?,
@@ -263,10 +248,8 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         y: sync_f64("FSMS_ECEF_Y.csv")?,
         z: sync_f64("FSMS_ECEF_Z.csv")?,
 
-        //pressure: sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?,
         pressure: pressure.clone(),
     };
-
     for i in 0..timestamps.len() {
         wtr.write_record(&[
             format!("{:.4}", pres_pure[i]),
@@ -362,7 +345,7 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
     let rotation_matrix = ecef_to_ned_matrix(lat_ref, lon_ref);
 
-    for i in 0..data.lat.len() {
+    for i in start_idx..data.lat.len() {
         let ecef_current = Vector3::new(data.x[i], data.y[i], data.z[i]);
         let delta_ecef = ecef_current - ecef_ref;
         let ned = rotation_matrix * delta_ecef;
@@ -370,7 +353,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         data.x[i] = ned.x; //North
         data.y[i] = ned.y; //East
         data.z[i] = ned.z; //Down
-
         // wird schon umgewandelt in run_ekf_on_flightdata
         //data.roll_1[i] = data.roll_1[i].to_radians();
         //data.pitch_1[i] = data.pitch_1[i].to_radians();
@@ -387,8 +369,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let g_ned_norm = g_ned.normalize();
     let g_body_norm = g_body.normalize();
 
-    //let g_ned_norm = Vector3::new(0.0, 0.0, -1.0);
-    //let g_body_norm = Vector3::new(1.0, 0.0, 0.0);
 
     // Quaternion (lRotationn from NED to body), x, y, z, w
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
@@ -415,9 +395,9 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[14] = q_i2b.j;
     x[15] = q_i2b.k;
     //Biases, 16, 17, 18, 19, 20, 21 = 0
-    x[22] = alt_ref - data.pressure[start_idx] as f64;
+    //x[22] = alt_ref - data.pressure[start_idx] as f64;
     //let pressure_offset = data.pressure[start_idx];
-    //x[22] = 0.0 - data.pressure[start_idx] as f64;
+    x[22] = -alt_ref + data.pressure[start_idx] as f64;
 
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
     //println!("ppppppppppppppppppp: {}", p);
@@ -429,6 +409,8 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     r[(0, 0)] = 0.01;
     r[(1, 1)] = 0.01;
     r[(2, 2)] = 0.01;
+
+    
     //
     //let gps_pos_std = 50.0_f64;
     //let gps_alt_std = 50.0_f64;
@@ -447,8 +429,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     //r[(8, 8)] = gyro_std.powi(2);
     //r[(9, 9)] = baro_alt_std.powi(2);
     //q[(22, 22)] = 1.0;
-
-
 
     //println!("p {}", p);
     //println!("q {}", q);
@@ -651,7 +631,7 @@ impl RocketEKF {
         if self.p.iter().any(|&x| x.is_nan()) {
             //println!("p joseph form {}", self.p);
             println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
-            confirm();
+            //confirm();
         }
 
         // quaternion normalize
@@ -785,14 +765,14 @@ impl FlightManager {
             }
 
             let mut z_measured = SVector::<f64, 10>::zeros();
-            z_measured[0] = data.lat[i];
-            z_measured[1] = data.lon[i];
-            z_measured[2] = data.alt[i];
+           // z_measured[0] = data.lat[i];
+           // z_measured[1] = data.lon[i];
+           // z_measured[2] = data.alt[i];
             //NEUE
 
-          //  z_measured[0] = data.x[i];
-          //  z_measured[1] = data.y[i];
-          //  z_measured[2] = data.z[i];
+              z_measured[0] = data.x[i];
+              z_measured[1] = data.y[i];
+              z_measured[2] = data.z[i];
             for j in 0..6 {
                 z_measured[3 + j] = mean_measurement[j];
             }

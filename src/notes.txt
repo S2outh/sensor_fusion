@@ -1,0 +1,12 @@
+chrashed:
+62160 kaputtes ned
+61762 ned repariert
+37202 luis start initalisierungen 
+
+merken:
+wir rechnen in ned
+
+variabeln namen:
+p covarianz
+q process noise
+r measurment noise 

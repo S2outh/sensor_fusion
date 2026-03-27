@@ -181,8 +181,8 @@ pub fn latlonh_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
     let (sin_lat, cos_lat) = sincos(lat);
     let (sin_lon, cos_lon) = sincos(lon);
 
-    let n = sqrt(a / (1.0 - e_sq * sin_lat * sin_lat));
-
+    //let n = sqrt(a / (1.0 - e_sq * sin_lat * sin_lat));
+    let n = a / sqrt(1.0 - e_sq * sin_lat * sin_lat);
     let x = (n + h_m) * cos_lat * cos_lon;
     let y = (n + h_m) * cos_lat * sin_lon;
     let z = (n * (1.0 - e_sq) + h_m) * sin_lat;
