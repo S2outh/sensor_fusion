@@ -167,7 +167,7 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
     let start_timestamp = 486612436.0 / 100000.0;
     //let skip_count = 7512;
-    let skip_count = 1;
+    let skip_count = 500_000;
     let master_raw_times = &master_raw_times[skip_count..];
     let timestamps: Vec<f64> = master_raw_times
         .into_iter()

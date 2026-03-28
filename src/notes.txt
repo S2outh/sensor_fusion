@@ -2,8 +2,7 @@ chrashed:
 62160 kaputtes ned
 61762 ned repariert
 37202 luis start initalisierungen 
-124776
-
+124776 anpassung jacobian
 merken:
 wir rechnen in ned
 

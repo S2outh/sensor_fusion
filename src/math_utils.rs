@@ -647,22 +647,22 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
     h[(2, 2)] = 1.0; // d(gps_d) / d(down)
 
     // Baro
-    h[(9, 2)] = -1.0; // d(baro_alt) / d(down_pos)
-    h[(9, 22)] = 1.0; // d(baro_alt) / d(baro_bias)
+    h[(9, 2)] = 1.0; // d(baro_alt) / d(down_pos)
+    h[(9, 22)] = - 1.0; // d(baro_alt) / d(baro_bias)
 
     // predictet measurment = true acc - bias, because of that second row is negativ
     h[(3, 6)] = 1.0;
     h[(4, 7)] = 1.0;
     h[(5, 8)] = 1.0;
-    // Accel-Bias
-    h[(3, 16)] = 1.0;
-    h[(4, 17)] = 1.0;
-    h[(5, 18)] = 1.0;
+    // Accel-Bias war mal positiv
+    h[(3, 16)] = - 1.0;
+    h[(4, 17)] = - 1.0;
+    h[(5, 18)] = - 1.0;
 
     // Gyro bias
-    h[(6, 19)] = 1.0;
-    h[(7, 20)] = 1.0;
-    h[(8, 21)] = 1.0;
+    h[(6, 19)] = - 1.0;
+    h[(7, 20)] = - 1.0;
+    h[(8, 21)] = - 1.0;
     h[(6, 9)] = 1.0;
     h[(7, 10)] = 1.0;
     h[(8, 11)] = 1.0;
