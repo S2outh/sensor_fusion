@@ -64,7 +64,6 @@ fn confirm() {
 }
 
 pub fn pres_to_alt(pres: f32) -> f32 {
-    //44_330.0 * (1.0 - powf(pres/101274.697, 1.0/5.255)) //Graz
     44_330.0 * (1.0 - powf(pres / 104_315.0, 1.0 / 5.255)) //HyEnD
 }
 
@@ -110,7 +109,7 @@ pub fn quaternion_rotation_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
 }
 
 pub fn compute_d_rotation_d_quaternion(q: &[f64; 4]) -> [Matrix3<f64>; 4] {
-    // q[0]=w, q[1]=x, q[2]=y, q[3]=z (Annahme: Hamilton-Notation)
+    // q[0]=w, q[1]=x, q[2]=y, q[3]=z 
     let w = q[0];
     let x = q[1];
     let y = q[2];
@@ -181,7 +180,6 @@ pub fn latlonh_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
     let (sin_lat, cos_lat) = sincos(lat);
     let (sin_lon, cos_lon) = sincos(lon);
 
-    //let n = sqrt(a / (1.0 - e_sq * sin_lat * sin_lat));
     let n = a / sqrt(1.0 - e_sq * sin_lat * sin_lat);
     let x = (n + h_m) * cos_lat * cos_lon;
     let y = (n + h_m) * cos_lat * sin_lon;
@@ -289,21 +287,14 @@ pub fn gps_to_ned(
 }
 
 pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -> (f64, f64, f64) {
-    // 1. Inputs in nalgebra-Typen wandeln
     let ned = Vector3::from(ned_arr);
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
 
-    // 2. Rotationsmatrix holen (ECEF -> NED)
+    // Rotation Matrix ECEF -> NED
     let r: Matrix3<f64> = ecef_to_ned_matrix(lat_ref, lon_ref);
-
-    // 3. Rücktransformation: delta_ecef = R^T * ned
-    // Da R orthogonal ist, ist die Inverse gleich der Transponierten.
     let delta_ecef = r.transpose() * ned;
-
-    // 4. ECEF Position berechnen
     let ecef_current = ecef_ref + delta_ecef;
 
-    // 5. ECEF zu Geodätisch (WGS84 Konstanten)
     let a = 6378137.0;
     let b = 6356752.314245;
     let e_sq = 0.00669437999014;
@@ -313,7 +304,6 @@ pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -
     let y = ecef_current.y;
     let z = ecef_current.z;
 
-    // Bowring's Algorithmus
     let p = sqrt(x * x + y * y);
     let th = atan2(a * z, b * p);
 
@@ -333,14 +323,14 @@ pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -
     (lat_rad.to_degrees(), lon_rad.to_degrees(), alt)
 }
 
-pub fn get_reference_coordinates_new(data: &FlightData) -> (f64, f64, f64) {
-    for i in 0..data.lat.len() {
-        if data.lat[i].abs() > 0.1 {
-            return (data.lat[i], data.lon[i], data.alt[i]);
-        }
-    }
-    (0.0, 0.0, 0.0)
-}
+//pub fn get_reference_coordinates_new(data: &FlightData) -> (f64, f64, f64) {
+  //  for i in 0..data.lat.len() {
+    //    if data.lat[i].abs() > 0.1 {
+      //      return (data.lat[i], data.lon[i], data.alt[i]);
+        //}
+   // }
+   // (0.0, 0.0, 0.0)
+//}
 
 pub fn normalize_vector(vector: [f32; 3]) -> [f32; 3] {
     let norm_sq = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
@@ -647,8 +637,8 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
     h[(2, 2)] = 1.0; // d(gps_d) / d(down)
 
     // Baro
-    h[(9, 2)] = 1.0; // d(baro_alt) / d(down_pos)
-    h[(9, 22)] = - 1.0; // d(baro_alt) / d(baro_bias)
+    h[(9, 2)] =  1.0; // d(baro_alt) / d(down_pos)
+    h[(9, 22)] =  -1.0; // d(baro_alt) / d(baro_bias)
 
     // predictet measurment = true acc - bias, because of that second row is negativ
     h[(3, 6)] = 1.0;

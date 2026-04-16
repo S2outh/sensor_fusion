@@ -87,54 +87,6 @@ fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usiz
     values[*last_idx]
 }
 
-pub fn get_times_old(limit: usize, step: usize) -> Result<Vec<f64>, Box<dyn Error>> {
-    let base_path = "./src/data_set_1/";
-    let files = vec![
-        "FSMS_ACC_Z_1.csv",
-        "FSMS_ACC_Y_1.csv",
-        "FSMS_ACC_X_1.csv",
-        "FSMS_ACC_Z_2.csv",
-        "FSMS_ACC_Y_2.csv",
-        "FSMS_ACC_X_2.csv",
-        "FSMS_GYRO_Z_1.csv",
-        "FSMS_GYRO_Y_1.csv",
-        "FSMS_GYRO_X_1.csv",
-        "FSMS_GYRO_Z_2.csv",
-        "FSMS_GYRO_Y_2.csv",
-        "FSMS_GYRO_X_2.csv",
-        "FSMS_PRESSURE.csv",
-        "FSMS_PX_LAT.csv",
-        "FSMS_PX_LONG.csv",
-        "FSMS_PX_HEIGHT.csv",
-        "FSMS_ECEF_X.csv",
-        "FSMS_ECEF_Y.csv",
-        "FSMS_ECEF_Z.csv",
-    ];
-
-    let mut all_timestamps: Vec<f64> = Vec::new();
-
-    for file_name in &files {
-        let path = format!("{}{}", base_path, file_name);
-
-        if let Ok((times, _)) = open_csv_64(&path, limit, step, 1) {
-            //let times = &times[75..];
-            //all_timestamps.extend(times);
-            let rounded_times = times.into_iter().map(|t| (t / 10.0).round() * 10.0);
-            all_timestamps.extend(rounded_times);
-            println!("All timestamps {}", all_timestamps.len());
-        }
-    }
-
-    if all_timestamps.is_empty() {
-        return Err("time is an illusion".into());
-    }
-
-    all_timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    all_timestamps.dedup();
-
-    Ok(all_timestamps)
-}
-
 pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
 
@@ -162,12 +114,10 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let step = 10;
 
     let master_raw_times = get_times(limit)?; //1_426_361 
-    //let start_timestamp = 11179.65185;
-    //let start_timestamp = 17077.09405;
 
     let start_timestamp = 486612436.0 / 100000.0;
-    //let skip_count = 7512;
-    let skip_count = 500_000;
+    let skip_count = 90_000;
+    //let skip_count = 1;
     let master_raw_times = &master_raw_times[skip_count..];
     let timestamps: Vec<f64> = master_raw_times
         .into_iter()
@@ -209,11 +159,7 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     };
 
     let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
-    let pres_pure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
 
-    let file = File::create("./height.csv")?;
-    let mut wtr = Writer::from_writer(file);
-    wtr.write_record(&["pres_pure", "pres_alt", "height"])?;
     let mut last = 100_000.0_f32;
 
     for v in &mut pressure {
@@ -250,15 +196,6 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
 
         pressure: pressure.clone(),
     };
-    for i in 0..timestamps.len() {
-        wtr.write_record(&[
-            format!("{:.4}", pres_pure[i]),
-            format!("{:.4}", pressure[i]),
-            format!("{:.4}", data.alt[i]),
-        ])?;
-    }
-
-    wtr.flush()?;
 
     let pathi = "./vsinput.csv";
     export_flight_data_to_csv(&data, &timestamps, &pathi)?;
@@ -323,7 +260,7 @@ fn confirm() {
     let mut answer = String::new();
     io::stdin()
         .read_line(&mut answer)
-        .expect("Fehler beim Lesen");
+        .expect("Error while reading");
 }
 
 // --------------------------Filter --------------------------
@@ -340,7 +277,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let alt_ref = data.alt[start_idx];
     println!("alt_ref {}", alt_ref);
     println!("start_idk {}", start_idx);
-    //confirm();
 
     let ecef_ref = Vector3::from(latlonh_to_ecef(lat_ref, lon_ref, alt_ref));
     let rotation_matrix = ecef_to_ned_matrix(lat_ref, lon_ref);
@@ -353,10 +289,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
         data.x[i] = ned.x; //North
         data.y[i] = ned.y; //East
         data.z[i] = ned.z; //Down
-        // wird schon umgewandelt in run_ekf_on_flightdata
-        //data.roll_1[i] = data.roll_1[i].to_radians();
-        //data.pitch_1[i] = data.pitch_1[i].to_radians();
-        //data.yaw_1[i] = data.yaw_1[i].to_radians();
     }
 
     let g_ned = Vector3::new(0.0, 0.0, 9.8); //9.8
@@ -371,8 +303,6 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
 
     // Quaternion (lRotationn from NED to body), x, y, z, w
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
-
-    //println!("whup whup quat {}", q_i2b);
 
     // Kalman matrix initialization
     type StateVector = SVector<f64, 23>;
@@ -394,45 +324,36 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[14] = q_i2b.j;
     x[15] = q_i2b.k;
     //Biases, 16, 17, 18, 19, 20, 21 = 0
-    //x[22] = alt_ref - data.pressure[start_idx] as f64;
-    //let pressure_offset = data.pressure[start_idx];
-    //x[22] = -alt_ref + data.pressure[start_idx] as f64;
     x[22] = 0.0;
+
     let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
-    //println!("ppppppppppppppppppp: {}", p);
     let mut q = SMatrix::<f64, 23, 23>::identity() * 0.01; // process noise
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
-    // increasing process noise for baro, reducing measurment noise for gps
-    q[(22, 22)] = 1e-3;
-    r[(0, 0)] = 0.01;
-    r[(1, 1)] = 0.01;
-    r[(2, 2)] = 0.01;
-    r[(9, 9)] = 10_000.0;
+    // old initialization values
+    //q[(22, 22)] = 1e-3;
+    //r[(0, 0)] = 0.01;
+    //r[(1, 1)] = 0.01;
+    //r[(2, 2)] = 0.01;
+    //r[(9, 9)] = 10_000.0;
 
-    //
-    //let gps_pos_std = 50.0_f64;
-    //let gps_alt_std = 50.0_f64;
-    //let baro_alt_std = 200.0_f64;
-    //let accel_std = 1.5_f64;
-    //let gyro_std = 0.1_f64;
-    //let deg_per_meter = 1.0 / 111132.0;
-    //r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    //r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
-    //r[(2, 2)] = gps_alt_std.powi(2); // alt
-    //r[(3, 3)] = accel_std.powi(2);
-    //r[(4, 4)] = accel_std.powi(2);
-    //r[(5, 5)] = accel_std.powi(2);
-    //r[(6, 6)] = gyro_std.powi(2);
-    //r[(7, 7)] = gyro_std.powi(2);
-    //r[(8, 8)] = gyro_std.powi(2);
-    //r[(9, 9)] = baro_alt_std.powi(2);
-    //q[(22, 22)] = 1.0;
-
-    //println!("p {}", p);
-    //println!("q {}", q);
-    //println!("x {}", x);
-    //println!("r {}", r);
+    let gps_pos_std = 50.0_f64;
+    let gps_alt_std = 50.0_f64;
+    let baro_alt_std = 200.0_f64;
+    let accel_std = 1.5_f64;
+    let gyro_std = 0.1_f64;
+    let deg_per_meter = 1.0 / 111132.0;
+    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    r[(2, 2)] = gps_alt_std.powi(2); // alt
+    r[(3, 3)] = accel_std.powi(2);
+    r[(4, 4)] = accel_std.powi(2);
+    r[(5, 5)] = accel_std.powi(2);
+    r[(6, 6)] = gyro_std.powi(2);
+    r[(7, 7)] = gyro_std.powi(2);
+    r[(8, 8)] = gyro_std.powi(2);
+    r[(9, 9)] = baro_alt_std.powi(2);
+    q[(22, 22)] = 1.0;
 
     RocketEKF::new(x, p, q, r)
 }
@@ -454,33 +375,27 @@ impl RocketEKF {
     }
     pub fn print_state(&self) {
         println!("--- EKF State (23 Elements) ---");
-        // Position (0-2)
         println!(
             "Pos (x,y,z):    {:>10.4} {:>10.4} {:>10.4}",
             self.state[0], self.state[1], self.state[2]
         );
-        // Velocity (3-5)
         println!(
             "Vel (vx,vy,vz): {:>10.4} {:>10.4} {:>10.4}",
             self.state[3], self.state[4], self.state[5]
         );
-        // Acc (6-8)
         println!(
             "Acc : {:>10.4} {:>10.4} {:>10.4} ",
             self.state[6], self.state[7], self.state[8]
         );
-        // Gyroscop
         println!(
             "Gyro: {:>10.4} {:>10.4} {:>10.4}",
             self.state[9], self.state[10], self.state[11]
         );
-        // Quat Biases (13-15)
         println!(
-            "Quat (w, x, y, z): {:>10.4} {:>10.4} {:>10.4} {:>10.4}",
+            "Quat (w, x, y, z): {:>10.8} {:>10.8} {:>10.8} {:>10.8}",
             self.state[12], self.state[13], self.state[14], self.state[15]
         );
 
-        // Restliche 7 Elemente (falls du noch Beschleunigung/andere Biases drin hast)
         print!("Rest:           ");
         for i in 16..23 {
             print!("{:>10.4} ", self.state[i]);
@@ -492,33 +407,27 @@ impl RocketEKF {
         self.p = (&self.p + self.p.transpose()) * 0.5;
         if dt > 1.0 {
             println!(
-                "AHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
-            HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHhh, zeit"
+                "There is an time issue"
             );
-            //confirm();
         };
         let f = state_transition_jacobian(&self.state, dt);
         self.print_state();
-        if f.iter().any(|&x| x.is_nan()) {
+        //if f.iter().any(|&x| x.is_nan()) {
             //println!("f after state_transition jacobian {}", f);
-            self.print_state();
-            //confirm();
-        }
+            //self.print_state();
+       //}
         self.state = state_transition(&self.state, dt);
         self.p = f * self.p * f.transpose() + self.q;
 
         let q_slice = self.state.fixed_rows::<4>(12);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         let q_norm = normalize_quaternion(q_raw);
-        //println!("Ich bin ein cutes quat, in predict {:?}", q_norm);
         self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
     }
 
     pub fn update(&mut self, z_measured: &SVector<f64, 10>, mask: &[bool; 10]) {
         let z_pred_full = measurement_function(&self.state, false);
-        //println!("after measurment {}", self.state);
         let h_full = measurement_jacobian(&self.state);
-        //println!("after measurment jacobian {}", self.state);
 
         // Only activ measurments
         let idx: Vec<usize> = mask
@@ -552,10 +461,6 @@ impl RocketEKF {
             println!("s kalman gain {}", s);
             //confirm();
         }
-        // println!("kalman h {}", h);
-        // println!("kalman p {}", self.p);
-        // println!("kalman h.transpose {}", h.transpose());
-        // println!("kalman r {}", r);
         s = (&s + s.transpose()) / 2.0;
 
         let s_inv = s
@@ -565,7 +470,6 @@ impl RocketEKF {
             .expect("S matrix inversion failed");
         let mut k = &self.p * h.transpose() * s_inv;
 
-        //println!("k {}", k);
 
         // quat slow with little gain
         for i in 0..4 {
@@ -578,31 +482,34 @@ impl RocketEKF {
         let mut innovation = DVector::zeros(idx.len());
         for (i, &current_idx) in idx.iter().enumerate() {
             innovation[i] = z_measured[current_idx] - z_pred[i];
-            //println!("z: {}", z_measured[current_idx]);
-            //println!("z_pred: {}", z_pred[i])
         }
 
-        // Catcht suddenly GPS intro
+        // GPS data update
         if idx.contains(&2) {
             let h_idx_in_innovation = idx.iter().position(|&x| x == 2).unwrap();
             let h_innovation = innovation[h_idx_in_innovation];
-
-            //if h_innovation.abs() > 1000.0 {
-
+            
+            // Hard reset
             if h_innovation.abs() > 1000.0 {
+                println!("Not normal GPS, hard reset of position");
+                //confirm();
                 self.state[0] = z_measured[0];
                 self.state[1] = z_measured[1];
                 self.state[2] = z_measured[2];
-
+                
+                //increasing baro bias
                 self.p[(22, 22)] = 100.0;
                 innovation[h_idx_in_innovation] = 0.0;
+
+                // increasing gps uncertainty
                 self.p
                     .fixed_view_mut::<3, 3>(0, 0)
                     .copy_from(&(self.r.fixed_view::<3, 3>(0, 0) * 5.0));
 
                 let mut r_gps = self.r.fixed_view_mut::<3, 3>(0, 0);
                 r_gps *= 5.0;
-
+                
+                // decople gps and velocity
                 self.p.fixed_view_mut::<3, 3>(0, 3).scale_mut(0.05);
                 self.p.fixed_view_mut::<3, 3>(3, 0).scale_mut(0.05);
                 self.baro_needs_sync = true;
@@ -628,9 +535,8 @@ impl RocketEKF {
         let i_kh = i - (&k * h);
         self.p = &i_kh * &self.p * i_kh.transpose() + &k * r * k.transpose();
         if self.p.iter().any(|&x| x.is_nan()) {
-            //println!("p joseph form {}", self.p);
-            println!("WEEEEEEEEEEEEEEEEEEEE CRAAAAAAAAAAAAAAAAAASHHHHHHHHHHHEEEEEEEEEEEDDDDDD");
-            //confirm();
+            println!("p joseph form {}", self.p);
+            confirm();
         }
 
         // quaternion normalize
@@ -729,8 +635,7 @@ impl FlightManager {
             if self.calibration_active && (current_time - self.calibration_start_time <= 5.0) {
                 // 5s Dauer
                 self.calibration_count += 1;
-                //println!("Calibration counter: {}", self.calibration_count);
-                //ekf.q.fixed_view_mut::<4, 4>(12, 12).copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
+                ekf.q.fixed_view_mut::<4, 4>(12, 12).copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
                 for j in 3..6 {
                     mean_measurement[j] = 0.0;
                 }
@@ -764,11 +669,6 @@ impl FlightManager {
             }
 
             let mut z_measured = SVector::<f64, 10>::zeros();
-            // z_measured[0] = data.lat[i];
-            // z_measured[1] = data.lon[i];
-            // z_measured[2] = data.alt[i];
-            //NEUE
-
             z_measured[0] = data.x[i];
             z_measured[1] = data.y[i];
             z_measured[2] = data.z[i];
@@ -795,8 +695,6 @@ impl FlightManager {
             }
 
             ekf.update(&z_measured, &mask);
-            println!("After update:");
-            ekf.print_state();
             estimated_states.push(ekf.state.clone());
             z_prev = Some(z_measured);
             prev_time = current_time;
