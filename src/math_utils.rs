@@ -109,7 +109,7 @@ pub fn quaternion_rotation_matrix(q: &[f32; 4]) -> [[f32; 3]; 3] {
 }
 
 pub fn compute_d_rotation_d_quaternion(q: &[f64; 4]) -> [Matrix3<f64>; 4] {
-    // q[0]=w, q[1]=x, q[2]=y, q[3]=z 
+    // q[0]=w, q[1]=x, q[2]=y, q[3]=z
     let w = q[0];
     let x = q[1];
     let y = q[2];
@@ -324,12 +324,12 @@ pub fn ned_to_gps(ned_arr: [f64; 3], lat_ref: f64, lon_ref: f64, alt_ref: f64) -
 }
 
 //pub fn get_reference_coordinates_new(data: &FlightData) -> (f64, f64, f64) {
-  //  for i in 0..data.lat.len() {
-    //    if data.lat[i].abs() > 0.1 {
-      //      return (data.lat[i], data.lon[i], data.alt[i]);
-        //}
-   // }
-   // (0.0, 0.0, 0.0)
+//  for i in 0..data.lat.len() {
+//    if data.lat[i].abs() > 0.1 {
+//      return (data.lat[i], data.lon[i], data.alt[i]);
+//}
+// }
+// (0.0, 0.0, 0.0)
 //}
 
 pub fn normalize_vector(vector: [f32; 3]) -> [f32; 3] {
@@ -637,22 +637,22 @@ pub fn measurement_jacobian(state: &SVector<f64, 23>) -> SMatrix<f64, 10, 23> {
     h[(2, 2)] = 1.0; // d(gps_d) / d(down)
 
     // Baro
-    h[(9, 2)] =  1.0; // d(baro_alt) / d(down_pos)
-    h[(9, 22)] =  -1.0; // d(baro_alt) / d(baro_bias)
+    h[(9, 2)] = 1.0; // d(baro_alt) / d(down_pos)
+    h[(9, 22)] = -1.0; // d(baro_alt) / d(baro_bias)
 
     // predictet measurment = true acc - bias, because of that second row is negativ
     h[(3, 6)] = 1.0;
     h[(4, 7)] = 1.0;
     h[(5, 8)] = 1.0;
     // Accel-Bias war mal positiv
-    h[(3, 16)] = - 1.0;
-    h[(4, 17)] = - 1.0;
-    h[(5, 18)] = - 1.0;
+    h[(3, 16)] = -1.0;
+    h[(4, 17)] = -1.0;
+    h[(5, 18)] = -1.0;
 
     // Gyro bias
-    h[(6, 19)] = - 1.0;
-    h[(7, 20)] = - 1.0;
-    h[(8, 21)] = - 1.0;
+    h[(6, 19)] = -1.0;
+    h[(7, 20)] = -1.0;
+    h[(8, 21)] = -1.0;
     h[(6, 9)] = 1.0;
     h[(7, 10)] = 1.0;
     h[(8, 11)] = 1.0;

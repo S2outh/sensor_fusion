@@ -8,14 +8,19 @@ use nalgebra::{DMatrix, DVector, SMatrix, SVector, UnitQuaternion, Vector3};
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
+use std::str::FromStr;
 use std::{f32, usize};
 
-fn open_csv(
+fn open_csv<T>(
     path: &str,
     limit: usize,
     step: usize,
     row: usize,
-) -> Result<(Vec<f64>, Vec<f32>), Box<dyn Error>> {
+) -> Result<(Vec<f64>, Vec<T>), Box<dyn Error>>
+where
+    T: FromStr,
+    T::Err: Error + 'static,
+{
     let file = File::open(path)?;
     let mut rdr = csv::Reader::from_reader(file);
     let mut values = Vec::new();
@@ -25,45 +30,19 @@ fn open_csv(
         if i >= limit {
             break;
         }
-        if i % step == 0 {
-            let record = result?;
-            if let (Some(t_str), Some(v_str)) = (record.get(0), record.get(row)) {
-                let t: f64 = t_str.trim().parse()?;
-                let v: f32 = v_str.trim().parse()?;
-                times.push(t);
-                values.push(v);
-            }
+        if i % step != 0 {
+            continue;
+        }
+
+        let record = result?;
+        if let (Some(t_str), Some(v_str)) = (record.get(0), record.get(row)) {
+            let t: f64 = t_str.trim().parse()?;
+            let v: T = v_str.trim().parse()?;
+            times.push(t);
+            values.push(v);
         }
     }
-    Ok((times, values))
-}
 
-fn open_csv_64(
-    path: &str,
-    limit: usize,
-    step: usize,
-    row: usize,
-) -> Result<(Vec<f64>, Vec<f64>), Box<dyn Error>> {
-    let file = File::open(path)?;
-    let mut rdr = csv::Reader::from_reader(file);
-    let mut values = Vec::new();
-    let mut times = Vec::new();
-
-    for (i, result) in rdr.records().enumerate() {
-        if i >= limit {
-            break;
-        }
-        if i % step == 0 {
-            let record = result?;
-            if let (Some(t_str), Some(v_str)) = (record.get(0), record.get(row)) {
-                let t: f64 = t_str.trim().parse()?;
-                let v: f64 = v_str.trim().parse()?;
-                times.push(t);
-                values.push(v);
-            }
-        }
-    }
-    println!("TIMES LENGTH {} of {}", times.len(), path);
     Ok((times, values))
 }
 
@@ -87,51 +66,51 @@ fn interpolate(target_t: f64, times: &[f64], values: &[f64], last_idx: &mut usiz
     values[*last_idx]
 }
 
-pub fn get_times(limit: usize) -> Result<Vec<f64>, Box<dyn Error>> {
-    let base_path = "./src/data_set_1/";
-
-    let master_file = "FSMS_ACC_Z_1.csv";
-    let path = format!("{}{}", base_path, master_file);
-
-    let mut all_timestamps: Vec<f64> = Vec::new();
-
-    if let Ok((times, _)) = open_csv_64(&path, limit, 10, 1) {
-        let rounded_times = times.into_iter().map(|t| (t / 10.0).round() * 10.0);
-        all_timestamps.extend(rounded_times);
-    }
-
-    all_timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    all_timestamps.dedup();
-
-    println!("END OF ALL NUMBERS: {}", all_timestamps.len());
-    Ok(all_timestamps)
-}
-
 pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let base_path = "./src/data_set_1/";
     let limit = usize::MAX;
     //let limit = 50000;
     let step = 10;
 
-    let master_raw_times = get_times(limit)?; //1_426_361 
-
     let start_timestamp = 486612436.0 / 100000.0;
     let skip_count = 90_000;
     //let skip_count = 1;
-    let master_raw_times = &master_raw_times[skip_count..];
-    let timestamps: Vec<f64> = master_raw_times
+
+    let master_path = format!("{}{}", base_path, "FSMS_ACC_Z_1.csv");
+    let (master_times_raw, master_vals_raw) = open_csv::<f32>(&master_path, limit, step, 1)?;
+
+    let master_times_raw: Vec<f64> = master_times_raw
         .into_iter()
-        .map(|t| t / 100000.0)
-        .filter(|&t| t >= start_timestamp)
+        .map(|t| (t / 10.0).round() * 10.0)
         .collect();
+
+    let master_times_raw = &master_times_raw[skip_count..];
+    let master_vals_raw = &master_vals_raw[skip_count..];
+    let mut master_raw_times = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut accel_x_1 = Vec::new();
+
+    for (&t, &v) in master_times_raw.iter().zip(master_vals_raw.iter()) {
+        let t_sec = t / 100000.0;
+        if t_sec >= start_timestamp {
+            master_raw_times.push(t);
+            timestamps.push(t_sec);
+            accel_x_1.push(v / 100.0);
+        }
+    }
+
+    println!("END OF ALL NUMBERS: {}", master_raw_times.len());
 
     let sync_f32_scaled =
         |name: &str, scale: f32, invert: bool| -> Result<Vec<f32>, Box<dyn Error>> {
-            let (s_times, s_vals) = open_csv(&format!("{}{}", base_path, name), limit, step, 1)?;
+            let (s_times, s_vals) =
+                open_csv::<f32>(&format!("{}{}", base_path, name), limit, step, 1)?;
+
             let s_times: Vec<f64> = s_times
                 .into_iter()
                 .map(|t| (t / 10.0).round() * 10.0)
                 .collect();
+
             let mut last_idx = 0;
             let s_vals_f64: Vec<f64> = s_vals.iter().map(|&v| v as f64).collect();
 
@@ -146,12 +125,15 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
         };
 
     let sync_f64 = |name: &str| -> Result<Vec<f64>, Box<dyn Error>> {
-        let (s_times, s_vals) = open_csv_64(&format!("{}{}", base_path, name), limit, step, 1)?;
+        let (s_times, s_vals) = open_csv::<f64>(&format!("{}{}", base_path, name), limit, step, 1)?;
+
         let s_times: Vec<f64> = s_times
             .into_iter()
             .map(|t| (t / 10.0).round() * 10.0)
             .collect();
+
         let mut last_idx = 0;
+
         Ok(master_raw_times
             .iter()
             .map(|&t| interpolate(t, &s_times, &s_vals, &mut last_idx))
@@ -161,7 +143,6 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     let mut pressure = sync_f32_scaled("FSMS_PRESSURE.csv", 1.0, false)?;
 
     let mut last = 100_000.0_f32;
-
     for v in &mut pressure {
         if *v > 0.0 {
             last = *v;
@@ -170,7 +151,7 @@ pub fn load_all_data() -> Result<(FlightData, Vec<f64>), Box<dyn Error>> {
     }
 
     let data = FlightData {
-        accel_x_1: sync_f32_scaled("FSMS_ACC_Z_1.csv", 100.0, false)?,
+        accel_x_1,
         accel_y_1: sync_f32_scaled("FSMS_ACC_Y_1.csv", 100.0, true)?,
         accel_z_1: sync_f32_scaled("FSMS_ACC_X_1.csv", 100.0, false)?,
 
@@ -331,29 +312,29 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
     // old initialization values
-    //q[(22, 22)] = 1e-3;
-    //r[(0, 0)] = 0.01;
-    //r[(1, 1)] = 0.01;
-    //r[(2, 2)] = 0.01;
-    //r[(9, 9)] = 10_000.0;
+    q[(22, 22)] = 1e-3;
+    r[(0, 0)] = 0.01;
+    r[(1, 1)] = 0.01;
+    r[(2, 2)] = 0.01;
+    r[(9, 9)] = 10_000.0;
 
-    let gps_pos_std = 50.0_f64;
-    let gps_alt_std = 50.0_f64;
-    let baro_alt_std = 200.0_f64;
-    let accel_std = 1.5_f64;
-    let gyro_std = 0.1_f64;
-    let deg_per_meter = 1.0 / 111132.0;
-    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
-    r[(2, 2)] = gps_alt_std.powi(2); // alt
-    r[(3, 3)] = accel_std.powi(2);
-    r[(4, 4)] = accel_std.powi(2);
-    r[(5, 5)] = accel_std.powi(2);
-    r[(6, 6)] = gyro_std.powi(2);
-    r[(7, 7)] = gyro_std.powi(2);
-    r[(8, 8)] = gyro_std.powi(2);
-    r[(9, 9)] = baro_alt_std.powi(2);
-    q[(22, 22)] = 1.0;
+    //let gps_pos_std = 50.0_f64;
+    //let gps_alt_std = 50.0_f64;
+    //let baro_alt_std = 200.0_f64;
+    //let accel_std = 1.5_f64;
+    //let gyro_std = 0.1_f64;
+    //let deg_per_meter = 1.0 / 111132.0;
+    //r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    //r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    //r[(2, 2)] = gps_alt_std.powi(2); // alt
+    //r[(3, 3)] = accel_std.powi(2);
+    //r[(4, 4)] = accel_std.powi(2);
+    //r[(5, 5)] = accel_std.powi(2);
+    //r[(6, 6)] = gyro_std.powi(2);
+    //r[(7, 7)] = gyro_std.powi(2);
+    //r[(8, 8)] = gyro_std.powi(2);
+    //r[(9, 9)] = baro_alt_std.powi(2);
+    //q[(22, 22)] = 1.0;
 
     RocketEKF::new(x, p, q, r)
 }
@@ -406,16 +387,14 @@ impl RocketEKF {
         // Meine
         self.p = (&self.p + self.p.transpose()) * 0.5;
         if dt > 1.0 {
-            println!(
-                "There is an time issue"
-            );
+            println!("There is an time issue");
         };
         let f = state_transition_jacobian(&self.state, dt);
         self.print_state();
         //if f.iter().any(|&x| x.is_nan()) {
-            //println!("f after state_transition jacobian {}", f);
-            //self.print_state();
-       //}
+        //println!("f after state_transition jacobian {}", f);
+        //self.print_state();
+        //}
         self.state = state_transition(&self.state, dt);
         self.p = f * self.p * f.transpose() + self.q;
 
@@ -470,7 +449,6 @@ impl RocketEKF {
             .expect("S matrix inversion failed");
         let mut k = &self.p * h.transpose() * s_inv;
 
-
         // quat slow with little gain
         for i in 0..4 {
             for col in 0..k.ncols() {
@@ -488,7 +466,7 @@ impl RocketEKF {
         if idx.contains(&2) {
             let h_idx_in_innovation = idx.iter().position(|&x| x == 2).unwrap();
             let h_innovation = innovation[h_idx_in_innovation];
-            
+
             // Hard reset
             if h_innovation.abs() > 1000.0 {
                 println!("Not normal GPS, hard reset of position");
@@ -496,7 +474,7 @@ impl RocketEKF {
                 self.state[0] = z_measured[0];
                 self.state[1] = z_measured[1];
                 self.state[2] = z_measured[2];
-                
+
                 //increasing baro bias
                 self.p[(22, 22)] = 100.0;
                 innovation[h_idx_in_innovation] = 0.0;
@@ -508,7 +486,7 @@ impl RocketEKF {
 
                 let mut r_gps = self.r.fixed_view_mut::<3, 3>(0, 0);
                 r_gps *= 5.0;
-                
+
                 // decople gps and velocity
                 self.p.fixed_view_mut::<3, 3>(0, 3).scale_mut(0.05);
                 self.p.fixed_view_mut::<3, 3>(3, 0).scale_mut(0.05);
@@ -635,7 +613,9 @@ impl FlightManager {
             if self.calibration_active && (current_time - self.calibration_start_time <= 5.0) {
                 // 5s Dauer
                 self.calibration_count += 1;
-                ekf.q.fixed_view_mut::<4, 4>(12, 12).copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
+                ekf.q
+                    .fixed_view_mut::<4, 4>(12, 12)
+                    .copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
                 for j in 3..6 {
                     mean_measurement[j] = 0.0;
                 }
