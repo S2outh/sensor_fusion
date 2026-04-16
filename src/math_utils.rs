@@ -32,9 +32,9 @@ pub struct FlightData {
 }
 
 pub struct RocketEKF {
-    pub state: SVector<f64, 23>,
-    pub p: SMatrix<f64, 23, 23>,
-    pub q: SMatrix<f64, 23, 23>,
+    pub state: SVector<f64, 17>,
+    pub p: SMatrix<f64, 17, 17>,
+    pub q: SMatrix<f64, 17, 23>,
     pub r: SMatrix<f64, 10, 10>,
     pub baro_needs_sync: bool,
 }

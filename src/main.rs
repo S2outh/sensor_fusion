@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = "./vsoutput.csv";
     let mut file = File::create(path)?;
     let lat_ref: f64 = 67.8935; // Beispielwert Kiruna
-    let lon_ref: f64 = 21.0;
+    let lon_ref: f64 = 21.1053;
 
     writeln!(file, "lat,lon,alt,v_n,v_e,v_d,q1,q2,q3,q4")?;
 
@@ -38,10 +38,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             state[3],
             state[4],
             state[5], // Vel (bleibt m/s)
-            state[12],
-            state[13],
-            state[14],
-            state[15] // Quat
+            state[6],
+            state[7],
+            state[8],
+            state[9] // Quat
         );
         writeln!(file, "{}", line)?;
     }

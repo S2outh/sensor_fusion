@@ -286,7 +286,7 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let q_i2b = UnitQuaternion::rotation_between(&g_ned_norm, &g_body_norm).unwrap();
 
     // Kalman matrix initialization
-    type StateVector = SVector<f64, 23>;
+    type StateVector = SVector<f64, 17>;
     let mut x = StateVector::zeros();
 
     //GPS
@@ -294,25 +294,24 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     x[1] = 0.0;
     x[2] = 0.0;
     // 3, 4, 5 = 0 -> Speed
-    // Acceleration
-    x[6] = data.accel_x_1[start_idx] as f64;
-    x[7] = data.accel_y_1[start_idx] as f64;
-    x[8] = data.accel_z_1[start_idx] as f64;
-    // 9, 10, 11 = 0 -> Gyroscop
     // Quaternions
-    x[12] = q_i2b.w;
-    x[13] = q_i2b.i;
-    x[14] = q_i2b.j;
-    x[15] = q_i2b.k;
-    //Biases, 16, 17, 18, 19, 20, 21 = 0
-    x[22] = 0.0;
+    x[6] = q_i2b.w;
+    x[7] = q_i2b.i;
+    x[8] = q_i2b.j;
+    x[9] = q_i2b.k;
+    //Biases, 10, 11, 12, 13, 14, 15
+    x[16] = 0.0;
 
-    let p = SMatrix::<f64, 23, 23>::identity() * 0.1; // covariance
-    let mut q = SMatrix::<f64, 23, 23>::identity() * 0.01; // process noise
+    let p = SMatrix::<f64, 17, 17>::identity() * 0.1; // covariance
+    let mut q = SMatrix::<f64, 17, 17>::identity() * 0.01; // process noise
     let mut r = SMatrix::<f64, 10, 10>::identity() * 0.5; // measurment noise
 
+    for i in 10..16 {
+        q[(i, i)] = 1e-12;
+    }
+
     // old initialization values
-    q[(22, 22)] = 1e-3;
+    q[(22, 22)] = 1.0;
     r[(0, 0)] = 0.01;
     r[(1, 1)] = 0.01;
     r[(2, 2)] = 0.01;
@@ -341,9 +340,9 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
 
 impl RocketEKF {
     pub fn new(
-        initial_state: SVector<f64, 23>,
-        p: SMatrix<f64, 23, 23>,
-        q: SMatrix<f64, 23, 23>,
+        initial_state: SVector<f64, 17>,
+        p: SMatrix<f64, 17, 17>,
+        q: SMatrix<f64, 17, 17>,
         r: SMatrix<f64, 10, 10>,
     ) -> Self {
         Self {
@@ -383,25 +382,25 @@ impl RocketEKF {
         }
         println!("\n-------------------------------");
     }
-    pub fn predict(&mut self, dt: f64) {
+    pub fn predict(&mut self, dt: f64, mean_measurment: &[f64; 6], ref_gps: &[f64; 3]) {
         // Meine
         self.p = (&self.p + self.p.transpose()) * 0.5;
         if dt > 1.0 {
             println!("There is an time issue");
         };
-        let f = state_transition_jacobian(&self.state, dt);
+        let f = state_transition_jacobian(&self.state, dt, &mean_measurment);
         self.print_state();
         //if f.iter().any(|&x| x.is_nan()) {
         //println!("f after state_transition jacobian {}", f);
         //self.print_state();
         //}
-        self.state = state_transition(&self.state, dt);
+        self.state = state_transition(&self.state, dt, mean_measurment, &ref_gps);
         self.p = f * self.p * f.transpose() + self.q;
 
-        let q_slice = self.state.fixed_rows::<4>(12);
+        let q_slice = self.state.fixed_rows::<4>(6);
         let q_raw: [f64; 4] = [q_slice[0], q_slice[1], q_slice[2], q_slice[3]];
         let q_norm = normalize_quaternion(q_raw);
-        self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
+        self.state.fixed_rows_mut::<4>(6).copy_from_slice(&q_norm);
     }
 
     pub fn update(&mut self, z_measured: &SVector<f64, 10>, mask: &[bool; 10]) {
@@ -420,7 +419,7 @@ impl RocketEKF {
         }
 
         let mut z_pred = DVector::zeros(idx.len());
-        let mut h = DMatrix::zeros(idx.len(), 23);
+        let mut h = DMatrix::zeros(idx.len(), 17);
         for (i, &current_idx) in idx.iter().enumerate() {
             z_pred[i] = z_pred_full[current_idx];
             h.set_row(i, &h_full.row(current_idx));
@@ -509,7 +508,7 @@ impl RocketEKF {
         self.state += correction;
         // Kovarianz (Joseph Form)
         // P = (I - K @ H) @ P @ (I - K @ H).T + K @ R @ K.T
-        let i = SMatrix::<f64, 23, 23>::identity();
+        let i = SMatrix::<f64, 17, 17>::identity();
         let i_kh = i - (&k * h);
         self.p = &i_kh * &self.p * i_kh.transpose() + &k * r * k.transpose();
         if self.p.iter().any(|&x| x.is_nan()) {
@@ -542,7 +541,10 @@ impl FlightManager {
             calibration_active: true,
             calibration_start_time: 0.0,
             calibration_count: 0,
-            last_valid_gps: 0,
+            block_gps: false,
+            valid_gps_lat: 0.0,
+            valid_gps_lon: 0.0,
+            valid_gps_alt: 0.0,
             accel_gyro_window: Vec::with_capacity(21),
             altitude_window: Vec::with_capacity(201),
         }
@@ -553,7 +555,7 @@ impl FlightManager {
         timestamps: &Vec<f64>,
         ekf: &mut RocketEKF,
         start_idx: usize,
-    ) -> Vec<SVector<f64, 23>> {
+    ) -> Vec<SVector<f64, 17>> {
         let mut estimated_states = Vec::with_capacity(timestamps.len());
         let mut prev_time = timestamps[start_idx];
 
@@ -625,27 +627,41 @@ impl FlightManager {
 
             let total_accel =
                 (cur_accel[0].powi(2) + cur_accel[1].powi(2) + cur_accel[2].powi(2)).sqrt();
-            if total_accel > 12.0 {
+            if total_accel > 12.0 && !self.rocket_started {
                 self.rocket_started = true;
             }
 
-            if self.rocket_started {
-                println!("ROcket started");
+            if self.rocket_started && self.ascent_flag {
+                println!("Rocket started");
                 //confirm();
-                self.altitude_window.push(ekf.state[2]);
-                if self.altitude_window.len() > 200 {
-                    self.altitude_window.remove(0);
+                for i in 10..22 {
+                    ekf.q[(i, i)] = 1e-12;
                 }
-                let mean_alt: f64 =
-                    self.altitude_window.iter().sum::<f64>() / self.altitude_window.len() as f64;
-                if self.ascent_flag && (ekf.state[2] * 1.05 < mean_alt) {
+                if ekf.state[5].abs() <= 10.0 && total_accel <= 0.25 {
                     self.ascent_flag = false;
                 }
             }
+            let mut ref_gps = [67.8936, 21.1053, 0.0];
 
             // predict
             if dt > 0.0 {
-                ekf.predict(dt);
+                ekf.predict(dt, &mean_measurement, &ref_gps);
+            }
+
+            if self.rocket_started {
+                if self.ascent_flag{
+                    if data.alt[i] >= self.valid_gps_alt{
+                        self.block_gps = false;
+                    }else{
+                        self.block_gps = true;
+                    }
+                }else{
+                    if data.alt[i] <= self.valid_gps_alt{
+                        self.block_gps = false;
+                    }else{
+                        self.block_gps = true;
+                    }
+                }
             }
 
             let mut z_measured = SVector::<f64, 10>::zeros();
@@ -678,6 +694,9 @@ impl FlightManager {
             estimated_states.push(ekf.state.clone());
             z_prev = Some(z_measured);
             prev_time = current_time;
+            if i == 10{
+                confirm();
+            }
         }
         estimated_states
     }
