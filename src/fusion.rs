@@ -5,6 +5,7 @@ use crate::math_utils::{
 };
 use csv::Writer;
 use nalgebra::{DMatrix, DVector, SMatrix, SVector, UnitQuaternion, Vector3};
+use std::convert::identity;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
@@ -311,29 +312,29 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     }
 
     // old initialization values
-    q[(22, 22)] = 1.0;
-    r[(0, 0)] = 0.01;
-    r[(1, 1)] = 0.01;
-    r[(2, 2)] = 0.01;
-    r[(9, 9)] = 10_000.0;
-
-    //let gps_pos_std = 50.0_f64;
-    //let gps_alt_std = 50.0_f64;
-    //let baro_alt_std = 200.0_f64;
-    //let accel_std = 1.5_f64;
-    //let gyro_std = 0.1_f64;
-    //let deg_per_meter = 1.0 / 111132.0;
-    //r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    //r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
-    //r[(2, 2)] = gps_alt_std.powi(2); // alt
-    //r[(3, 3)] = accel_std.powi(2);
-    //r[(4, 4)] = accel_std.powi(2);
-    //r[(5, 5)] = accel_std.powi(2);
-    //r[(6, 6)] = gyro_std.powi(2);
-    //r[(7, 7)] = gyro_std.powi(2);
-    //r[(8, 8)] = gyro_std.powi(2);
-    //r[(9, 9)] = baro_alt_std.powi(2);
     //q[(22, 22)] = 1.0;
+    //r[(0, 0)] = 0.01;
+    //r[(1, 1)] = 0.01;
+    //r[(2, 2)] = 0.01;
+    //r[(9, 9)] = 10_000.0;
+
+    let gps_pos_std = 50.0_f64;
+    let gps_alt_std = 50.0_f64;
+    let baro_alt_std = 200.0_f64;
+    let accel_std = 1.5_f64;
+    let gyro_std = 0.1_f64;
+    let deg_per_meter = 1.0 / 111132.0;
+    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
+    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    r[(2, 2)] = gps_alt_std.powi(2); // alt
+    r[(3, 3)] = accel_std.powi(2);
+    r[(4, 4)] = accel_std.powi(2);
+    r[(5, 5)] = accel_std.powi(2);
+    r[(6, 6)] = gyro_std.powi(2);
+    r[(7, 7)] = gyro_std.powi(2);
+    r[(8, 8)] = gyro_std.powi(2);
+    r[(9, 9)] = baro_alt_std.powi(2);
+    q[(16, 16)] = 1.0;
 
     RocketEKF::new(x, p, q, r)
 }
@@ -360,24 +361,12 @@ impl RocketEKF {
             self.state[0], self.state[1], self.state[2]
         );
         println!(
-            "Vel (vx,vy,vz): {:>10.4} {:>10.4} {:>10.4}",
-            self.state[3], self.state[4], self.state[5]
-        );
-        println!(
-            "Acc : {:>10.4} {:>10.4} {:>10.4} ",
-            self.state[6], self.state[7], self.state[8]
-        );
-        println!(
-            "Gyro: {:>10.4} {:>10.4} {:>10.4}",
-            self.state[9], self.state[10], self.state[11]
-        );
-        println!(
             "Quat (w, x, y, z): {:>10.8} {:>10.8} {:>10.8} {:>10.8}",
-            self.state[12], self.state[13], self.state[14], self.state[15]
+            self.state[6], self.state[7], self.state[8], self.state[9]
         );
 
         print!("Rest:           ");
-        for i in 16..23 {
+        for i in 10..15 {
             print!("{:>10.4} ", self.state[i]);
         }
         println!("\n-------------------------------");
@@ -461,68 +450,23 @@ impl RocketEKF {
             innovation[i] = z_measured[current_idx] - z_pred[i];
         }
 
-        // GPS data update
-        if idx.contains(&2) {
-            let h_idx_in_innovation = idx.iter().position(|&x| x == 2).unwrap();
-            let h_innovation = innovation[h_idx_in_innovation];
-
-            // Hard reset
-            if h_innovation.abs() > 1000.0 {
-                println!("Not normal GPS, hard reset of position");
-                //confirm();
-                self.state[0] = z_measured[0];
-                self.state[1] = z_measured[1];
-                self.state[2] = z_measured[2];
-
-                //increasing baro bias
-                self.p[(22, 22)] = 100.0;
-                innovation[h_idx_in_innovation] = 0.0;
-
-                // increasing gps uncertainty
-                self.p
-                    .fixed_view_mut::<3, 3>(0, 0)
-                    .copy_from(&(self.r.fixed_view::<3, 3>(0, 0) * 5.0));
-
-                let mut r_gps = self.r.fixed_view_mut::<3, 3>(0, 0);
-                r_gps *= 5.0;
-
-                // decople gps and velocity
-                self.p.fixed_view_mut::<3, 3>(0, 3).scale_mut(0.05);
-                self.p.fixed_view_mut::<3, 3>(3, 0).scale_mut(0.05);
-                self.baro_needs_sync = true;
-            }
-        }
-
-        // Baro Sync after intro GPS
-        if idx.contains(&9) {
-            let b_idx = idx.iter().position(|&x| x == 9).unwrap();
-            if self.baro_needs_sync {
-                let baro_meas = z_measured[9];
-                self.state[22] = self.state[2] - baro_meas;
-                self.baro_needs_sync = false;
-                self.p[(22, 22)] = 100.0;
-                innovation[b_idx] = 0.0;
-            }
-        }
         let correction = &k * innovation;
         self.state += correction;
-        // Kovarianz (Joseph Form)
-        // P = (I - K @ H) @ P @ (I - K @ H).T + K @ R @ K.T
+
         let i = SMatrix::<f64, 17, 17>::identity();
-        let i_kh = i - (&k * h);
+
+         let i_kh = i - (&k * h);
         self.p = &i_kh * &self.p * i_kh.transpose() + &k * r * k.transpose();
         if self.p.iter().any(|&x| x.is_nan()) {
-            println!("p joseph form {}", self.p);
-            confirm();
+           // println!("p joseph form {}", self.p);
         }
 
         // quaternion normalize
-        // w, x, y, z
         let q_raw = [
-            self.state[12],
-            self.state[13],
-            self.state[14],
-            self.state[15],
+            self.state[6],
+            self.state[7],
+            self.state[8],
+            self.state[9],
         ];
         let q_norm = normalize_quaternion(q_raw);
 
@@ -641,7 +585,7 @@ impl FlightManager {
                     self.ascent_flag = false;
                 }
             }
-            let mut ref_gps = [67.8936, 21.1053, 0.0];
+            let ref_gps = [67.8936, 21.1053, 0.0];
 
             // predict
             if dt > 0.0 {
@@ -649,16 +593,16 @@ impl FlightManager {
             }
 
             if self.rocket_started {
-                if self.ascent_flag{
-                    if data.alt[i] >= self.valid_gps_alt{
+                if self.ascent_flag {
+                    if data.alt[i] >= self.valid_gps_alt {
                         self.block_gps = false;
-                    }else{
+                    } else {
                         self.block_gps = true;
                     }
-                }else{
-                    if data.alt[i] <= self.valid_gps_alt{
+                } else {
+                    if data.alt[i] <= self.valid_gps_alt {
                         self.block_gps = false;
-                    }else{
+                    } else {
                         self.block_gps = true;
                     }
                 }
@@ -694,7 +638,7 @@ impl FlightManager {
             estimated_states.push(ekf.state.clone());
             z_prev = Some(z_measured);
             prev_time = current_time;
-            if i == 10{
+            if i == 10 {
                 confirm();
             }
         }
