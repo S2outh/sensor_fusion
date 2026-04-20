@@ -324,8 +324,8 @@ pub fn init_ekf(data: &mut FlightData) -> RocketEKF {
     let accel_std = 1.5_f64;
     let gyro_std = 0.1_f64;
     let deg_per_meter = 1.0 / 111132.0;
-    r[(0, 0)] = (gps_pos_std * deg_per_meter).powi(2); // lat
-    r[(1, 1)] = (gps_pos_std * deg_per_meter).powi(2); // lon
+    r[(0, 0)] = gps_pos_std.powi(2); // lat
+    r[(1, 1)] = gps_pos_std.powi(2); // lon
     r[(2, 2)] = gps_alt_std.powi(2); // alt
     r[(3, 3)] = accel_std.powi(2);
     r[(4, 4)] = accel_std.powi(2);
@@ -440,7 +440,7 @@ impl RocketEKF {
         // quat slow with little gain
         for i in 0..4 {
             for col in 0..k.ncols() {
-                k[(12 + i, col)] *= 0.05;
+                k[(6 + i, col)] *= 0.05;
             }
         }
 
@@ -455,22 +455,17 @@ impl RocketEKF {
 
         let i = SMatrix::<f64, 17, 17>::identity();
 
-         let i_kh = i - (&k * h);
+        let i_kh = i - (&k * h);
         self.p = &i_kh * &self.p * i_kh.transpose() + &k * r * k.transpose();
         if self.p.iter().any(|&x| x.is_nan()) {
-           // println!("p joseph form {}", self.p);
+            // println!("p joseph form {}", self.p);
         }
 
         // quaternion normalize
-        let q_raw = [
-            self.state[6],
-            self.state[7],
-            self.state[8],
-            self.state[9],
-        ];
+        let q_raw = [self.state[6], self.state[7], self.state[8], self.state[9]];
         let q_norm = normalize_quaternion(q_raw);
 
-        self.state.fixed_rows_mut::<4>(12).copy_from_slice(&q_norm);
+        self.state.fixed_rows_mut::<4>(6).copy_from_slice(&q_norm);
 
         // Covarianzmatrix symmetrical
         self.p = (&self.p + self.p.transpose()) / 2.0;
@@ -560,7 +555,7 @@ impl FlightManager {
                 // 5s Dauer
                 self.calibration_count += 1;
                 ekf.q
-                    .fixed_view_mut::<4, 4>(12, 12)
+                    .fixed_view_mut::<4, 4>(6, 6)
                     .copy_from(&(SMatrix::<f64, 4, 4>::identity() * 1e-9));
                 for j in 3..6 {
                     mean_measurement[j] = 0.0;
@@ -577,9 +572,9 @@ impl FlightManager {
 
             if self.rocket_started && self.ascent_flag {
                 println!("Rocket started");
-                //confirm();
-                for i in 10..22 {
-                    ekf.q[(i, i)] = 1e-12;
+                self.altitude_window.push(ekf.state[2]);
+                if self.altitude_window.len() > 200 {
+                    self.altitude_window.remove(0);
                 }
                 if ekf.state[5].abs() <= 10.0 && total_accel <= 0.25 {
                     self.ascent_flag = false;

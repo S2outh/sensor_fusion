@@ -402,18 +402,9 @@ pub fn state_transition(
     next_state[4] += a_ned.y * dt;
     next_state[5] += a_ned.z * dt;
 
-    let lat_ref = ref_gps[0];
-    let lon_ref = ref_gps[1];
-    let alt_ref = ref_gps[2];
-    let ned_current = gps_to_ned(state[0], state[1], state[2], lat_ref, lon_ref, alt_ref);
-    let n = ned_current[0] + (state[3] + next_state[3]) * 0.5 * dt;
-    let e = ned_current[1] + (state[4] + next_state[4]) * 0.5 * dt;
-    let d = ned_current[2] + (state[5] + next_state[5]) * 0.5 * dt;
-    let (lat, lon, alt) = ned_to_gps([n, e, d], lat_ref, lon_ref, alt_ref);
-    next_state[0] = lat;
-    next_state[1] = lon;
-    next_state[2] = alt;
-
+    next_state[0] += 0.5 * (state[3] + next_state[3]) * dt;
+    next_state[1] += 0.5 * (state[4] + next_state[4]) * dt;
+    next_state[2] += 0.5 * (state[5] + next_state[5]) * dt;
     let gx = (gyro[0] - state[13]) * dt;
     let gy = (gyro[1] - state[14]) * dt;
     let gz = (gyro[2] - state[15]) * dt;
@@ -448,7 +439,11 @@ pub fn state_transition(
     next_state
 }
 
-pub fn state_transition_jacobian(state: &SVector<f64, 17>, dt: f64, mean_measurement: &[f64; 6]) -> SMatrix<f64, 17, 17> {
+pub fn state_transition_jacobian(
+    state: &SVector<f64, 17>,
+    dt: f64,
+    mean_measurement: &[f64; 6],
+) -> SMatrix<f64, 17, 17> {
     let mut f = SMatrix::<f64, 17, 17>::identity(); // Diagonaleinträge = 1
     f[(0, 3)] = dt;
     f[(1, 4)] = dt;
@@ -466,11 +461,6 @@ pub fn state_transition_jacobian(state: &SVector<f64, 17>, dt: f64, mean_measure
     let q = UnitQuaternion::from_quaternion(Quaternion::from_vector(q_vec));
     let r = q.to_rotation_matrix();
 
-    let rad_to_deg = 180.0 / std::f64::consts::PI;
-    let r_earth = 6378137.0;
-    f[(0, 3)] = dt / r_earth * rad_to_deg;
-    f[(1, 4)] = dt / (r_earth * state[0].to_radians().cos()) * rad_to_deg;
-    f[(2, 5)] = -dt;
 
     // Python: F[3:6, 6:9] = R * dt
     // Python: F[3:6, 16:19] = -R * dt
@@ -498,8 +488,6 @@ pub fn state_transition_jacobian(state: &SVector<f64, 17>, dt: f64, mean_measure
     f[(9, 7)] = 0.5 * gy * dt;
     f[(9, 8)] = -0.5 * gx * dt;
 
-    let q_vals = [state[6], state[7], state[8], state[9]];
-
     f
 }
 
@@ -512,15 +500,15 @@ pub fn measurement_function(
 
     // Measurment vector
     SVector::<f64, 10>::from_column_slice(&[
-        state[0],      // gps_lat (bzw. North m)
-        state[1],      // gps_lon (bzw. East m)
-        state[2],      // gps_alt (bzw. Down m)
-        state[3],      // low_g_ax
-        state[4],      // low_g_ay
-        state[5],      // low_g_az
-        state[6],      // low_g_gx
-        state[7],      // low_g_gy
-        state[8],      // low_g_gz
+        state[0],      // gps_x
+        state[1],      // gps_y
+        state[2],      // gps_z
+        state[3],      // 
+        state[4],      
+        state[5],      
+        state[6],     
+        state[7],     
+        state[8],      
         baro_expected, // baro_alt
     ])
 }
@@ -551,8 +539,7 @@ pub fn measurement_jacobian(state: &SVector<f64, 17>) -> SMatrix<f64, 10, 17> {
     if (accel_norm - 9.81).abs() < 1e-2 {
         println!("problem stelle");
         confirm();
-        let q = [state[6], state[7], state[8], state[9]]; // x, y, z, w
-        println!("mein kleines kapputes q ist ude m {:?}", q);
+        let q = [state[9], state[6], state[7], state[8]]; // w, x, y, z
         let d_r_dq = compute_d_rotation_d_quaternion(&q);
         let g_ned = SVector::<f64, 3>::new(0.0, 0.0, 9.8);
 
