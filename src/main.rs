@@ -1,12 +1,13 @@
 use crate::{
-    fusion::{init_ekf, load_all_data},
+    fusion::init_ekf,
     math_utils::FlightManager,
+    run_utils::load_all_data, 
 };
 use std::{error::Error, fs::File, io::Write};
 
 pub mod fusion;
 pub mod math_utils;
-
+pub mod run_utils;
 // pos, lage, sicherheit
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -23,7 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let lat_ref: f64 = 67.8935; // Beispielwert Kiruna
     let lon_ref: f64 = 21.0;
 
-    writeln!(file, "lat,lon,alt,v_n,v_e,v_d,q1,q2,q3,q4")?;
+    writeln!(file, "lat,lon,alt,v_n,v_e,v_d,acc_n,acc_e,acc_d,q1,q2,q3,q4")?;
 
     for state in results {
         let lat_est = lat_ref + (state[0] / 111132.0);
@@ -31,13 +32,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         let alt_est = -state[2];
 
         let line = format!(
-            "{:.8},{:.8},{:.4},{:.4},{:.4},{:.4},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
             lat_est,
             lon_est,
             alt_est, // Transformierte Position
             state[3],
             state[4],
             state[5], // Vel (bleibt m/s)
+            state[6],
+            state[7],
+            state[8],
             state[12],
             state[13],
             state[14],
